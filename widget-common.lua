@@ -132,10 +132,13 @@ function M.card(name)
     own_window_class       = 'conky',   -- lowercase: matches the picom shadow-exclude
     own_window_title       = 'conky-gruvbox-' .. name,
     own_window_hints       = 'undecorated,below,sticky,skip_taskbar,skip_pager',
-    own_window_transparent = false,
-    own_window_argb_visual = true,
-    own_window_argb_value  = M.ALPHA,
-    own_window_colour      = p.bg0h,
+    -- conky 1.24 removed own_window_argb_visual / own_window_argb_value /
+    -- own_window_transparent: an ARGB visual is now picked automatically
+    -- whenever a compositor is running (and conky falls back to an opaque
+    -- depth-24 window if none is, so start after picom), and the card's
+    -- opacity rides in own_window_colour's alpha channel as #AARRGGBB.
+    -- M.ALPHA stays the single knob.
+    own_window_colour      = string.format('%02x%s', M.ALPHA, p.bg0h),
 
     alignment           = M.ALIGN,
     xinerama_head       = M.HEAD,
