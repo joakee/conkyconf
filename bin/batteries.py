@@ -9,10 +9,10 @@ Two device classes are read elsewhere and merged in, because UPower's own
 answer for them is wrong or absent. Both modules are optional -- if either
 raises or has nothing current, UPower's view is used unchanged.
 
-  AirPods    what BlueZ publishes is one coarse number, so airpods.py decodes
-             Apple's BLE advertisement instead and returns the left bud, right
-             bud and case separately; those replace UPower's single entry for
-             the same headphones.
+  AirPods    what BlueZ publishes is one coarse number, so airpods.py asks
+             podctld -- which holds the AAP control channel open anyway -- for
+             the left bud, right bud and case separately; those replace
+             UPower's single entry for the same headphones.
   iOS        UPower only sees an iPhone or iPad while it is plugged in, since
              its iDevice backend discovers devices through udev. idevices.py
              goes through usbmux instead, which reaches them over wi-fi too,
