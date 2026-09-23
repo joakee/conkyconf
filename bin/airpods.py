@@ -16,17 +16,24 @@ LibrePods has already negotiated and stored in its own config:
                   the ~100 anonymous BLE advertisers is actually this user's
   magicAccEncKey  decrypts the 16-byte payload (AES-128, single block)
 
-There are two sources, and the good one is tried first:
+There are three sources, and the good one is tried first:
 
-  AAP   the Apple Accessory Protocol control channel, L2CAP PSM 0x1001 on the
-        already-connected link. Handshake, ask for notifications, and the
-        AirPods report every component at 1% precision in about two seconds --
-        no radio scanning, no waiting for the buds to feel like advertising.
-        The catch is that the channel serves ONE host: if an iPhone nearby has
-        Bluetooth on it holds the session and the channel opens but never
-        answers, which is indistinguishable from a hang except by timeout.
-  BLE   the proximity-pairing advertisement, decoded as described below. Only
-        used when AAP is unavailable.
+  podctl  podctld (~/Projects/podctl) holds the AAP channel open permanently
+          for its own case-open popup, and that channel serves ONE client --
+          so whenever it is running, the AAP read below can only time out.
+          Asking the daemon instead is a ~1 ms round trip to something that
+          already has the numbers: no radio, no contention, and none of
+          LibrePods' keys needed, since podctld reports the name and address
+          too. This is the normal path on this machine.
+  AAP     the Apple Accessory Protocol control channel, L2CAP PSM 0x1001 on
+          the already-connected link. Handshake, ask for notifications, and
+          the AirPods report every component at 1% precision in about two
+          seconds -- no radio scanning, no waiting for the buds to feel like
+          advertising. The catch is the single session: if podctld, LibrePods
+          or an iPhone nearby holds it, the channel opens but never answers,
+          which is indistinguishable from a hang except by timeout.
+  BLE     the proximity-pairing advertisement, decoded as described below.
+          Only used when neither of the above can answer.
 
 Reading is passive: BlueZ caches ManufacturerData for advertisers it has seen,
 so when something else is already scanning -- LibrePods runs a continuous LE
@@ -47,6 +54,7 @@ import json
 import os
 import re
 import select
+import shutil
 import socket
 import subprocess
 import sys
@@ -86,6 +94,11 @@ SCAN_MAX  = int(os.environ.get("AIRPODS_SCAN_MAX", "900"))
 AAP_PSM     = 0x1001
 AAP_TIMEOUT = int(os.environ.get("AIRPODS_AAP_TIMEOUT", "8"))
 AAP_MIN     = int(os.environ.get("AIRPODS_AAP_MIN", "45"))
+
+# podctld answers off a unix socket in about a millisecond, so this path is
+# cheap enough to take on every conky tick and needs no rate limit of its own.
+PODCTL         = os.environ.get("AIRPODS_PODCTL", "podctl")
+PODCTL_TIMEOUT = int(os.environ.get("AIRPODS_PODCTL_TIMEOUT", "3"))
 
 SCAN_STATE = os.path.join(CACHE_DIR, "conky-gruvbox", "airpods.scan")
 SCAN_LOCK  = os.path.join(CACHE_DIR, "conky-gruvbox", "airpods.scan.lock")
@@ -365,6 +378,46 @@ def aap_read(addr, timeout=None):
             pass
 
 
+def podctl_read():
+    """Battery from podctld, or None: (components, device name, address).
+
+    The components mapping is shaped exactly like parse_battery()'s, so the
+    reading is indistinguishable downstream from an AAP or advert one. Name and
+    address come back with it because this path must keep working when
+    LibrePods' config -- the only other place the device name is stored -- is
+    gone.
+
+    Never raises: no daemon, no CLI, buds disconnected and malformed JSON all
+    just mean fall through to the sources below."""
+    exe = shutil.which(PODCTL)
+    if exe is None and os.sep not in PODCTL:
+        # conky inherits the session's PATH, which does not always carry
+        # ~/.local/bin, where podctl installs itself.
+        exe = os.path.expanduser("~/.local/bin/" + PODCTL)
+    if not exe or not os.path.exists(exe):
+        return None
+    try:
+        out = subprocess.run([exe, "status", "--json"], capture_output=True,
+                             text=True, timeout=PODCTL_TIMEOUT)
+        state = json.loads(out.stdout)["data"]
+    except Exception:
+        return None
+    if not state.get("connected"):
+        return None
+
+    bat = state.get("battery") or {}
+    comps = {}
+    for name in ("left", "right", "case"):
+        pct = bat.get(name)
+        # null is a component the daemon has no reading for -- the case while
+        # the lid is shut, or a bud that is out of its case and not reporting.
+        if isinstance(pct, int) and 1 <= pct <= 100:
+            comps[name] = {"pct": pct, "charging": bool(bat.get(name + "_charging"))}
+    if not comps:
+        return None
+    return comps, state.get("name", ""), state.get("address")
+
+
 # ── the last good reading ─────────────────────────────────────
 def _save_reading(r):
     try:
@@ -542,13 +595,28 @@ def build(d, conf, addr, via):
 def read(scan=True, cache=True):
     """Battery components for the AirPods, or None if there is nothing current.
 
-    When there is no fresh advert, the last decoded reading is served for up to
-    HOLD seconds (unless `cache` is off) and, if `scan` is set, a background
-    scan is started to top it up. The scan is never waited on.
+    podctld is asked first and, when it answers, nothing else runs -- no socket
+    of our own, no scan, no cache.
+
+    Otherwise, when there is no fresh advert, the last decoded reading is
+    served for up to HOLD seconds (unless `cache` is off) and, if `scan` is
+    set, a background scan is started to top it up. The scan is never waited
+    on.
 
     Returns a list of dicts shaped like bin/batteries.py's own device entries,
     plus `device_name` so the caller can drop UPower's duplicate of the same
     headphones."""
+    # podctld already owns the AAP channel, so ask it before trying to open a
+    # second one. It is live, it works with the buds in your ears, and it needs
+    # no LibrePods config -- so it is tried before load_conf() can raise.
+    got = podctl_read()
+    if got:
+        comps, name, addr = got
+        out = build(comps, {"deviceName": name}, addr, "podctl")
+        if out:
+            _save_reading(out)
+            return out
+
     conf = load_conf()
     hit = find_advert(conf["magicAccIRK"])
     if hit is None or _freshness(hit[1]) > STALE:
@@ -603,10 +671,13 @@ def diagnose():
     except Exception as e:
         aap = f"could not be tried ({e})"
 
+    pod = "answering" if podctl_read() else "not answering (is podctld running?)"
+
     st = _scan_state()
     due = max(0, int(st["last"] + st["interval"] - time.time()))
-    backoff = (f" AAP control channel: {aap}. Own scan: {st['fails']} "
-               f"consecutive misses, next in {due}s (every {st['interval']}s).")
+    backoff = (f" podctld: {pod}. AAP control channel: {aap}. Own scan: "
+               f"{st['fails']} consecutive misses, next in {due}s "
+               f"(every {st['interval']}s).")
     if not scanning:
         return ("nothing is scanning for BLE advertisements right now, so "
                 "BlueZ has no advert to read." + backoff)
