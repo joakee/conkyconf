@@ -1,5 +1,3 @@
-# conkyconf
-
 Custom gruvbox-dark Conky desktop widget stack: rounded gruvbox-themed cards
 for CPU, memory, weather, now-playing, and battery status, driven by Lua
 drawing helpers and Python data-source scripts.
