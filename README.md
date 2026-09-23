@@ -20,9 +20,10 @@ drawing helpers and Python data-source scripts.
 
 ## Notes
 
-- Battery percentage for AirPods is read via the AAP L2CAP protocol (PSM
+- ~~Battery percentage for AirPods is read via the AAP L2CAP protocol (PSM
   0x1001), falling back to the encrypted BLE advertisement when a nearby
-  iPhone has stolen that session.
-- Weather data comes from the Bureau of Meteorology's public `/fwo/` products.
+  iPhone has stolen that session.~~ Now pulls data from [podctl](https://github.com/Rockykln/podctl).
+- Weather data comes from the Australain Government's Bureau of Meteorology's public `/fwo/` products.
+  - Potentially looking to implement other data sources in the future
 - `bin/reflow.py` re-reads the monitor head origin on every pass so a monitor
   hotplug doesn't strand the widget stack off-screen.
