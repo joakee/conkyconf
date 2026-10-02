@@ -38,15 +38,16 @@ Env:
 
 import datetime as dt
 import fcntl
-import gzip
 import json
 import math
 import os
-import re
 import subprocess
 import sys
-import urllib.request
-import xml.etree.ElementTree as ET
+import time
+
+# The network modules (urllib, gzip, re, ElementTree) are imported inside
+# fetch(): conky re-runs this every second to keep the refresh icon live, and
+# urllib alone is ~20 ms of import that a cache-only render never needs.
 
 TTL = int(os.environ.get("WEATHER_TTL", "900"))
 WMO = os.environ.get("WEATHER_WMO", "94608")
@@ -64,6 +65,13 @@ CACHE_DIR = os.path.join(
 )
 CACHE = os.path.join(CACHE_DIR, "weather.json")
 LOCK = os.path.join(CACHE_DIR, "weather.lock")
+# Present while the last manual refresh failed; cleared by any good fetch.
+ERR = os.path.join(CACHE_DIR, "weather.err")
+
+# A click refreshes in well under a second, which is shorter than conky's
+# one-second render tick, so the "refreshing" icon would usually never be
+# seen. Holding the lock this long gives the click visible acknowledgement.
+MIN_SPIN = 1.5
 
 FONT = "Maple Mono NF CN"
 
@@ -93,6 +101,9 @@ FALLBACK = ("\U000F0599", "\U000F0594")
 
 
 def get(url, timeout):
+    import gzip
+    import urllib.request
+
     req = urllib.request.Request(
         url, headers={"User-Agent": UA, "Accept-Encoding": "gzip"}
     )
@@ -106,6 +117,9 @@ def get(url, timeout):
 def fetch(timeout):
     """Pull both products and replace the cache atomically. Raises on failure,
     which leaves the previous good reading in place."""
+    import re
+    import xml.etree.ElementTree as ET
+
     obs = json.loads(get(OBS_URL, timeout))["observations"]
     head, rec = obs["header"][0], obs["data"][0]
     if rec.get("air_temp") is None:
@@ -159,7 +173,19 @@ def fetch(timeout):
                     if uv_index is not None:
                         break
     except Exception:
-        pass
+        # A failed precis fetch used to write nulls over the last good
+        # forecast, so min/max/UV/condition vanished from the card for a whole
+        # TTL. Carry the previous values forward instead; the forecast only
+        # changes a few times a day.
+        try:
+            with open(CACHE) as f:
+                prev = json.load(f)
+            icon, precis = prev.get("icon"), prev.get("cond") or ""
+            temp_min, temp_max = prev.get("temp_min"), prev.get("temp_max")
+            uv_index = prev.get("uv_index")
+            uv_category = prev.get("uv_category")
+        except Exception:
+            pass
 
     data = {
         "loc": ", ".join(x for x in (rec.get("name"), head.get("state")) if x),
@@ -233,6 +259,16 @@ def solar(lat, lon, tz_offset_hours, date):
     }
 
 
+def refreshing():
+    """True while a --refresh holds the lock."""
+    try:
+        with open(LOCK, "a") as lk:
+            fcntl.flock(lk, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        return False
+    except OSError:
+        return True
+
+
 def hm(minutes):
     m = int(round(minutes)) % 1440
     return f"{m // 60:02d}:{m % 60:02d}"
@@ -256,17 +292,34 @@ def main():
     os.makedirs(CACHE_DIR, exist_ok=True)
 
     if len(sys.argv) > 1 and sys.argv[1] == "--refresh":
-        # Manual refresh: ignore the TTL, fetch synchronously, and report
-        # success through the exit status. The lock keeps it from racing a
-        # background refresh already in flight.
+        # Refresh now, ignoring the TTL, and report success through the exit
+        # status. Used both by the stale-cache background refresh and by a
+        # click on the widget's refresh icon (lua/weather.lua). If a refresh
+        # is already in flight this one is redundant and just leaves --
+        # renders run every second, so a blocking lock would queue up a
+        # fetch per render for as long as BOM was slow.
         with open(LOCK, "w") as lk:
             try:
-                fcntl.flock(lk, fcntl.LOCK_EX)
+                fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return 0
+            t0 = time.monotonic()
+            try:
                 fetch(20)
+                ok = True
             except Exception as exc:
                 print(f"refresh failed: {exc}", file=sys.stderr)
-                return 1
-        return 0
+                ok = False
+            time.sleep(max(0.0, MIN_SPIN - (time.monotonic() - t0)))
+            if ok:
+                try:
+                    os.unlink(ERR)
+                except FileNotFoundError:
+                    pass
+            else:
+                with open(ERR, "w"):
+                    pass
+        return 0 if ok else 1
 
     age = None
     if os.path.exists(CACHE):
@@ -280,7 +333,7 @@ def main():
             data = fetch(8)
         except Exception:
             pass
-    elif age >= TTL:
+    elif age >= TTL and not refreshing():
         # Detached refresh. Output must be discarded or execpi waits on us.
         subprocess.Popen(
             [sys.executable, os.path.abspath(__file__), "--refresh"],
@@ -313,10 +366,18 @@ def main():
 
     # The timestamp is the Bureau's observation time, not when we fetched it:
     # what matters is how old the reading is, not how old our copy is.
-    stamp = ""
+    # The icon is the button lua/weather.lua listens for: yellow sync glyph
+    # while a refresh is running, red while the last one failed.
+    if refreshing():
+        icon = "${color3}\U000F04E6${color5}"
+    elif os.path.exists(ERR):
+        icon = "${color7}\U000F0450${color5}"
+    else:
+        icon = "\U000F0450"
+    stamp = icon
     ts = data.get("obs_local", "")
     if len(ts) >= 12:
-        stamp = f"\U000F0450 {ts[8:10]}:{ts[10:12]}"
+        stamp = f"{icon} {ts[8:10]}:{ts[10:12]}"
 
     temp = data.get("temp")
     feels = data.get("feels")

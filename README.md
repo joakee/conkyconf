@@ -21,7 +21,11 @@ drawing helpers and Python data-source scripts.
 - ~~Battery percentage for AirPods is read via the AAP L2CAP protocol (PSM
   0x1001), falling back to the encrypted BLE advertisement when a nearby
   iPhone has stolen that session.~~ Now pulls data from [podctl](https://github.com/Rockykln/podctl).
-- Weather data comes from the Australain Government's Bureau of Meteorology's public `/fwo/` products.
+- Weather data comes from the Australian Government's Bureau of Meteorology's public `/fwo/` products.
+  Observations update every 30 minutes and the forecast a few times a day;
+  the widget caches for 15 minutes. Click the refresh icon in the weather
+  card's header to fetch immediately (`lua/weather.lua` → `bin/weather.py
+  --refresh`): it turns yellow while fetching and red if the fetch failed.
   - Potentially looking to implement other data sources in the future
 - `bin/reflow.py` re-reads the monitor head origin on every pass so a monitor
   hotplug doesn't strand the widget stack off-screen.
