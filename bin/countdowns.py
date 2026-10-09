@@ -29,6 +29,14 @@ MAX_SHOWN = int(os.environ.get("COUNTDOWNS_MAX", 6))
 DONE_HOLD = int(os.environ.get("COUNTDOWNS_DONE_HOLD", 6 * 3600))
 LABEL_MAX = 22    # chars at size 9 that fit beside a size-11 bold time
 
+# Row spacing, as ${voffset}s. Conky sizes the window WITHOUT the voffsets
+# inside the text, so each row's net shift eats into the bottom padding and a
+# full card ends up nearly touching its edge. A voffset at the very end of the
+# last line IS counted, so the total is handed back there -- measured, that
+# restores the bottom margin pixel for pixel whatever the row count.
+ROW_GAP   = 4     # above each countdown
+DATE_LIFT = -1    # tucks the date up under its label
+
 FONT = "Maple Mono NF CN"
 GLYPH = "\U000F051F"   # timer-sand, verified by rendering in this font
 
@@ -79,13 +87,14 @@ def main():
     except FileNotFoundError:
         items = []
     except (OSError, ValueError, AttributeError):
-        print("${voffset 2}${color7}countdowns.json unreadable", end="")
+        print("${voffset 2}${color7}countdowns.json unreadable${voffset 2}",
+              end="")
         return
 
     now = time.time()
     rows = [r for r in items if r[0] - now > -DONE_HOLD][:MAX_SHOWN]
     if not rows:
-        print("${voffset 2}${color5}nothing counting down", end="")
+        print("${voffset 2}${color5}nothing counting down${voffset 2}", end="")
         return
 
     lines = []
@@ -95,11 +104,12 @@ def main():
             label = label[:LABEL_MAX - 1] + "…"
         value = fmt_remaining(left) if left > 0 else "done"
         lines.append(
-            "${voffset 4}${color0}%s${alignr}%s${font %s:bold:size=11}%s${font}\n"
-            "${voffset -1}${color5}${font %s:size=8}%s${font}"
-            % (esc(label), colour(left), FONT, value,
+            "${voffset %d}${color0}%s${alignr}%s${font %s:bold:size=11}%s${font}\n"
+            "${voffset %d}${color5}${font %s:size=8}%s${font}"
+            % (ROW_GAP, esc(label), colour(left), FONT, value, DATE_LIFT,
                FONT, t.strftime("%a %-d %b %Y · %H:%M")))
-    print("\n".join(lines), end="")
+    print("\n".join(lines)
+          + "${voffset %d}" % ((ROW_GAP + DATE_LIFT) * len(lines)), end="")
 
 
 if __name__ == "__main__":
