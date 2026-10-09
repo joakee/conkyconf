@@ -223,7 +223,12 @@ def plan(cards, anchor, lay):
 
     A card that is not running reserves no space -- if a widget has died or
     been switched off, the stack should close up over it rather than leave a
-    hole shaped like a card that is not there.
+    hole shaped like a card that is not there. Nor does a card that is running
+    but has unmapped its own window: that is how a card hides itself while it
+    has nothing to show (the countdowns card does). It still counts as present
+    for STARTUP_GRACE, so hiding does not freeze the rest of the stack, and the
+    Map/UnmapNotify it causes arrives on the StructureNotifyMask already held
+    on every client, so the stack closes up and reopens at once.
 
     x is derived here rather than left to conky. Conky reads xinerama_head at
     parse time, exactly as it does gap_y, so a card started before a monitor
@@ -240,6 +245,8 @@ def plan(cards, anchor, lay):
                 continue
             client, frame = got
             try:
+                if client.get_attributes().map_state == X.IsUnmapped:
+                    continue                  # hidden by its own card
                 g = frame.get_geometry()
             except xerror.XError:
                 continue
@@ -318,6 +325,10 @@ def show(d, root, anchor, lay):
         print("%-12s %6d %12s %12s   %s"
               % (name, h, "%d,%d" % cur, "%d,%d" % want,
                  "" if cur == want else "MOVE"))
+    placed = {name for name, _, _, _ in moves}
+    hidden = [n for n in cards if n not in placed]
+    if hidden:
+        print("hidden:", ", ".join(hidden))
     missing = [s["name"] for row in lay.rows for s in row
                if s["name"] not in cards]
     if missing:
