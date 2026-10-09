@@ -90,6 +90,7 @@ M.stack = {
   { name = 'weather',    h = 200, interval = 1  },
   { name = 'nowplaying', h = 146, interval = 1,  auto = true },
   { name = 'batteries',  h = 130, interval = 5,  auto = true },
+  { name = 'countdowns', h = 90,  interval = 1,  auto = true },
 }
 
 -- Build the conky.config table for one card, deriving its y position
