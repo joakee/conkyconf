@@ -34,6 +34,15 @@ manager: configuring the client window is redirected to the WM, which moves
 the frame. Positions are therefore READ from the frame (the window actually
 placed on screen) and WRITTEN to the client.
 
+The stack also wraps. The space kept clear under the last card is never less
+than M.TOP, the space kept above the first -- measured from the top of any
+panel reserving the bottom of that monitor (its _NET_WM_STRUT_PARTIAL), not
+from the glass. A row that would cut into it starts a new column instead, at
+the top, one card-width plus M.GAP further from the aligned edge. It is
+re-derived every pass like everything else, so a card that grows (Now Playing
+when a track starts) pushes whatever no longer fits across, and it comes back
+when there is room again.
+
 Needs python-xlib. Everything else is stdlib.
 """
 
@@ -49,7 +58,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import head as headmod                                       # noqa: E402
 
 try:
-    from Xlib import X, display, error as xerror
+    from Xlib import X, Xatom, display, error as xerror
 except ImportError:
     sys.stderr.write("reflow: python-xlib is not installed "
                      "(pacman -S python-xlib)\n")
@@ -146,7 +155,48 @@ def layout(path=COMMON):
 # ── where the stack begins ───────────────────────────────────
 # The corner the stack is measured from: `top` is M.TOP already lifted onto the
 # head, `left` and `width` are the head's own, for resolving the near edge.
-Anchor = namedtuple("Anchor", "top left width")
+# `limit` is the lowest y a card may reach: the top of whatever panel reserves
+# the bottom of this head (or the head's own bottom), less M.TOP again, so the
+# margin under the stack matches the margin above it.
+Anchor = namedtuple("Anchor", "top left width limit")
+
+
+def usable_bottom(d, root, h):
+    """The y where the bottom panel on head `h` begins, or the head's bottom.
+
+    Read from every client's strut (_NET_WM_STRUT_PARTIAL, falling back to the
+    legacy full-width _NET_WM_STRUT). _NET_WORKAREA is no use here: it is one
+    rectangle for the whole root, and with monitors of different heights it
+    says nothing about this one. Walks _NET_CLIENT_LIST rather than the root's
+    children because xfwm reparents the panel; ~1 ms for 26 clients.
+    """
+    bottom = h.y + h.height
+    try:
+        root_h = root.get_geometry().height
+        clients = root.get_full_property(
+            d.intern_atom("_NET_CLIENT_LIST"), Xatom.WINDOW)
+    except xerror.XError:
+        return bottom
+    if not clients:
+        return bottom
+    partial = d.intern_atom("_NET_WM_STRUT_PARTIAL")
+    legacy = d.intern_atom("_NET_WM_STRUT")
+    for wid in clients.value:
+        w = d.create_resource_object("window", wid)
+        try:
+            p = w.get_full_property(partial, Xatom.CARDINAL)
+            if p and len(p.value) >= 12:
+                reserve, x0, x1 = p.value[3], p.value[10], p.value[11]
+            else:
+                p = w.get_full_property(legacy, Xatom.CARDINAL)
+                if not (p and len(p.value) >= 4):
+                    continue
+                reserve, x0, x1 = p.value[3], 0, root.get_geometry().width
+        except xerror.XError:
+            continue                    # a client that went away mid-walk
+        if reserve and x0 < h.x + h.width and x1 >= h.x:
+            bottom = min(bottom, root_h - reserve)
+    return bottom
 
 
 def resolve_anchor(d, root, base_top, verbose=False):
@@ -162,10 +212,12 @@ def resolve_anchor(d, root, base_top, verbose=False):
     beside the tree walk in discover.
     """
     h = headmod.resolve(d, root)
+    limit = usable_bottom(d, root, h) - base_top
     if verbose:
-        print("head %d at %d,%d %dx%d (%s)"
-              % (h.index, h.x, h.y, h.width, h.height, h.source), flush=True)
-    return Anchor(base_top + h.y, h.x, h.width)
+        print("head %d at %d,%d %dx%d (%s), cards end by y=%d"
+              % (h.index, h.x, h.y, h.width, h.height, h.source, limit),
+              flush=True)
+    return Anchor(base_top + h.y, h.x, h.width, limit)
 
 
 def watch_screen_changes(d, root, verbose=False):
@@ -235,8 +287,14 @@ def plan(cards, anchor, lay):
     was plugged in keeps the column of a head that has since renumbered. Widths
     are measured off the frames for the same reason the heights are: a half-row
     pair then keeps its gap without this file having to know M.PAD or M.HALF_W.
+
+    The stack wraps: a row that would end below anchor.limit starts a new
+    column at the top instead, offset from the previous column by that
+    column's widest row plus the gap. The first row of a column always goes
+    in, however tall, so an oversized card cannot push the stack off screen.
     """
     out, y = [], anchor.top
+    offset, col_w, col_rows = 0, 0, 0     # this column's distance from the edge
     for row in lay.rows:
         here, height = [], 0
         for s in row:
@@ -254,17 +312,22 @@ def plan(cards, anchor, lay):
             height = max(height, g.height)
         if not here:
             continue
-        # Lay the row out left to right from whichever edge it hugs, so a
-        # right-aligned stack mirrors without reordering the row.
         span = sum(w for _, _, _, w in here) + lay.gap * (len(here) - 1)
+        if col_rows and y + height > anchor.limit:
+            offset += col_w + lay.gap     # next column, back at the top
+            y, col_w, col_rows = anchor.top, 0, 0
+        # Lay the row out left to right from whichever edge it hugs, so a
+        # right-aligned stack mirrors without reordering the row; further
+        # columns grow away from that edge.
         if lay.align == "top_right":
-            x = anchor.left + anchor.width - lay.side - span
+            x = anchor.left + anchor.width - lay.side - offset - span
         else:
-            x = anchor.left + lay.side
+            x = anchor.left + lay.side + offset
         for name, client, cur, w in here:
             out.append((name, client, cur, (x, y)))
             x += w + lay.gap
         y += height + lay.gap
+        col_w, col_rows = max(col_w, span), col_rows + 1
     return out
 
 
@@ -354,9 +417,9 @@ def watch(d, root, lay, verbose):
         moved = resolve_anchor(d, root, lay.top)
         if moved != anchor:
             if verbose:
-                print("head moved: top %d -> %d, left %d -> %d"
-                      % (anchor.top, moved.top, anchor.left, moved.left),
-                      flush=True)
+                print("head moved: top %d -> %d, left %d -> %d, limit %d -> %d"
+                      % (anchor.top, moved.top, anchor.left, moved.left,
+                         anchor.limit, moved.limit), flush=True)
             anchor = moved
             # Every refusal on record was judged against the old head, and the
             # move that replaces it is the one that gets the stack back.
