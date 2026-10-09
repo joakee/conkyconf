@@ -17,6 +17,11 @@ for the length of the timeout, so a miss spawns a detached download and draws
 without art until it lands. Art is converted to PNG at exactly the size it will
 be drawn, because cairo can only load PNG and scaling at draw time is both
 slower and softer.
+
+The card is only on screen while a player has something loaded, playing or
+paused. When it would otherwise read "nothing playing" -- every player closed,
+or none with a track -- it hides itself (bin/cardvis.py) and the stack closes
+up over it.
 """
 
 import base64
@@ -27,6 +32,9 @@ import subprocess
 import sys
 import urllib.parse
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cardvis                                               # noqa: E402
 
 # ── layout, in pixels ─────────────────────────────────────────
 # Mirrored by lua/nowplaying.lua; the two must agree.
@@ -231,6 +239,7 @@ def main():
         st = pick()
     except Exception:
         st = None
+    cardvis.set_visible("nowplaying", bool(st))
 
     print("${color1}${font Maple Mono NF CN:size=10}" + GLYPH + "${font}  "
           "${color5}${font Maple Mono NF CN:size=8}NOW PLAYING${font}")
