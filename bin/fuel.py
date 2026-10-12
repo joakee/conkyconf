@@ -167,6 +167,41 @@ def safe(s):
     return "".join(c for c in str(s) if c not in "${}#").strip()
 
 
+# A suburb next to one of these is part of a longer place or road name, not
+# a label for the site, and must stay: "East Perth" in Perth, "Serpentine
+# Falls" in Serpentine, "Malaga Drive" in Malaga, "Thornlie Square".
+BEFORE = r"East|West|North|South|Upper|Lower|Mount|Mt|Port|Lake"
+AFTER = (
+    r"Falls|Vale|Valley|Hill|Hills|Heights|Park|Beach|Bay|Lake|Lakes|River|"
+    r"Waters|Brook|Creek|Airport|Junction|Grove|Gardens|Square|Road|Rd|"
+    r"Drive|Dr|Street|St|Avenue|Ave|Highway|Hwy"
+)
+
+
+def unplace(name, suburb):
+    """Drop the suburb from the station's name when it repeats it, since the
+    suburb has its own column: "Burk Alkimos" in Alkimos -> "Burk". Whole
+    words only, any case, and not where it is part of a longer place name
+    (see BEFORE/AFTER). A name that is nothing BUT the suburb is kept as is
+    rather than left blank."""
+    import re
+
+    if not suburb:
+        return name
+    # Lookbehinds must be fixed width, so the BEFORE check is done per match.
+    def drop(m):
+        head = name[: m.start()].split()
+        if head and re.fullmatch(BEFORE, head[-1], re.I):
+            return m.group(0)
+        return " "
+
+    pat = rf"(?<!\w){re.escape(suburb)}(?!\w)(?! (?:{AFTER})\b)"
+    out = re.sub(pat, drop, name, flags=re.I)
+    out = re.sub(r"\(\s*\)", " ", out)  # "Crystal Brook (Lesmurdie)"
+    out = re.sub(r"\s+", " ", out).strip(" -\u2013,/")
+    return out or name
+
+
 def fit(name, suburb):
     """Truncate the name so name + suburb share one row without colliding."""
     room = int((TEXT_W - GUTTER - len(suburb) * CH8) / CH9)
@@ -254,7 +289,7 @@ def main():
     rows = data.get("cheapest", [])
     for i, s in enumerate(rows):
         suburb = safe(s["suburb"]).title()
-        name = fit(safe(s["name"]), suburb)
+        name = fit(unplace(safe(s["name"]), suburb), suburb)
         gap = 6 if i == 0 else 1
         spent += gap
         tail = f"${{voffset {spent + 1}}}" if i == len(rows) - 1 else ""
