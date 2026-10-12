@@ -71,8 +71,7 @@ GLYPH = "\U000F0298"  # gas-station, verified by rendering in Maple Mono NF CN
 # inner padding (widget-common.lua's M.PAD) has to be added back in -- see the
 # same note in weather.py. Text widths are Maple Mono's advance at 96 dpi.
 PAD = 14
-PRICE_X = PAD + 14
-NAME_X = PAD + 62
+NAME_X = PAD + 48
 TEXT_W = 292 - (NAME_X - PAD)  # room for name + suburb
 CH9, CH8 = 7.2, 6.4  # px per char at size 9 / size 8
 GUTTER = 10  # minimum space between a name and its suburb
@@ -260,7 +259,7 @@ def main():
         spent += gap
         tail = f"${{voffset {spent + 1}}}" if i == len(rows) - 1 else ""
         print(
-            f"${{voffset {gap}}}${{color5}}{i + 1}${{goto {PRICE_X}}}${{color6}}{s['price']:.1f}"
+            f"${{voffset {gap}}}${{color6}}{s['price']:.1f}"
             f"${{goto {NAME_X}}}${{color}}{name}"
             f"${{alignr}}${{color5}}${{font {FONT}:size=8}}{suburb}${{font}}{tail}"
         )
