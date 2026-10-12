@@ -331,23 +331,23 @@ def main():
     print(header(product, stamp))
     print(
         f"${{voffset 2}}${{color3}}${{font {FONT}:bold:size=15}}"
-        f"{data['avg']:.1f}${{font}}"
-        f"${{color5}}${{offset 6}}${{voffset -4}}¢/L  state avg"
-        f"${{alignr}}{data['count']} sites${{voffset 4}}"
+        f"{data['avg']:.1f}¢/L${{font}}"
+        f"${{color5}}${{offset 8}}state avg"
+        f"${{alignr}}{data['count']} sites"
     )
     # Conky ignores mid-text ${voffset} when it sizes the window, so every
     # pixel of it above is taken out of the bottom padding. A ${voffset} at
     # the END of the last line is counted, so the sum is paid back there --
-    # plus 1 px, which is what it takes for the bottom margin to measure the
+    # less 2 px, which is what it takes for the bottom margin to measure the
     # same as the top (19 px from the window edge to the ink, both ways).
-    spent = 2 - 4 + 4
+    spent = 2
     rows = data.get("cheapest", [])
     for i, s in enumerate(rows):
         suburb = safe(s["suburb"]).title()
         name = fit(unplace(safe(s["name"]), suburb), suburb)
         gap = 6 if i == 0 else 1
         spent += gap
-        tail = f"${{voffset {spent + 1}}}" if i == len(rows) - 1 else ""
+        tail = f"${{voffset {spent - 2}}}" if i == len(rows) - 1 else ""
         print(
             f"${{voffset {gap}}}${{color6}}{s['price']:.1f}"
             f"${{goto {NAME_X}}}${{color}}{name}"
