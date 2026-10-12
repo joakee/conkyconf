@@ -6,11 +6,18 @@ fuelwatcher projects wrap:
 
   https://www.fuelwatch.wa.gov.au/fuelwatch/fuelWatchRSS?Product=1
 
-Product 1 is unleaded 91. With no Region/Suburb parameter the feed is every
-reporting site in the state (~940 of them, Kununurra to Esperance) despite
-its channel title saying "All Metro Regions". It is ~700 KB of XML, so the
-script reduces it to the handful of numbers the card shows and caches only
-those.
+With no Region/Suburb parameter the feed is every reporting site in the
+state (~940 of them for ULP, Kununurra to Esperance) despite its channel
+title saying "All Metro Regions". It is up to ~700 KB of XML, so the script
+reduces it to the handful of numbers the card shows and caches only those.
+
+Clicking the fuel label in the header (lua/fuel.lua -> --cycle) steps
+through PRODUCTS; the choice is kept in fuel.product and each product has
+its own cache. The feed never names the product it is serving, so the ids
+below were checked by price ordering (91 < 95 < 98, LPG cheapest, both
+diesels dearest) and match the fuelwatcher project's table. 3, 7-9 and
+12-30 return nothing. FuelWatch only publishes two diesels: plain (4) and
+"brand diesel" (11), the premium lines like Vortex and V-Power.
 
 The average is statewide; the cheapest list is Perth metro only. Items carry
 no region, so the metro sites come from separate per-region requests:
@@ -32,7 +39,7 @@ as weather.py.
 Env:
   FUEL_TTL       seconds before a refresh is triggered (default 3600)
   FUEL_RETRY     seconds between attempts after a failure (default 300)
-  FUEL_PRODUCT   FuelWatch product id (default 1, unleaded 91)
+  FUEL_PRODUCT   product shown before the first click (default 1, ULP 91)
   FUEL_TOP       how many cheapest sites to list (default 5)
   FUEL_REGIONS   FuelWatch region ids the cheapest list is drawn from
                  (default 25,26,27 = Perth metro; empty = whole state)
@@ -48,21 +55,45 @@ import time
 
 TTL = int(os.environ.get("FUEL_TTL", "3600"))
 RETRY = int(os.environ.get("FUEL_RETRY", "300"))
-PRODUCT = os.environ.get("FUEL_PRODUCT", "1")
 TOP = int(os.environ.get("FUEL_TOP", "5"))
 REGIONS = [r for r in os.environ.get("FUEL_REGIONS", "25,26,27").split(",") if r]
 
-URL = f"https://www.fuelwatch.wa.gov.au/fuelwatch/fuelWatchRSS?Product={PRODUCT}"
+# FuelWatch product id -> header label, in click order.
+PRODUCTS = {
+    "1": "ULP 91",
+    "2": "PULP 95",
+    "6": "PULP 98",
+    "4": "DIESEL",
+    "11": "BRAND DIESEL",
+    "5": "LPG",
+    "10": "E85",
+}
+
+URL = "https://www.fuelwatch.wa.gov.au/fuelwatch/fuelWatchRSS?Product={}"
 UA = "conky-gruvbox-fuel/1.0 (personal desktop widget)"
 
 CACHE_DIR = os.path.join(
     os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")),
     "conky-gruvbox",
 )
-CACHE = os.path.join(CACHE_DIR, "fuel.json")
-LOCK = os.path.join(CACHE_DIR, "fuel.lock")
-# mtime = when the last refresh was attempted, successful or not.
-ATTEMPT = os.path.join(CACHE_DIR, "fuel.attempt")
+# Which product is selected; survives restarts.
+CHOICE = os.path.join(CACHE_DIR, "fuel.product")
+
+
+def paths(product):
+    """cache, lock, and attempt file (whose mtime = when the last refresh was
+    attempted, successful or not) for one product."""
+    base = os.path.join(CACHE_DIR, f"fuel-{product}")
+    return base + ".json", base + ".lock", base + ".attempt"
+
+
+def selected():
+    try:
+        with open(CHOICE) as f:
+            p = f.read().strip()
+    except FileNotFoundError:
+        p = os.environ.get("FUEL_PRODUCT", "1")
+    return p if p in PRODUCTS else "1"
 
 FONT = "Maple Mono NF CN"
 GLYPH = "\U000F0298"  # gas-station, verified by rendering in Maple Mono NF CN
@@ -77,7 +108,7 @@ CH9, CH8 = 7.2, 6.4  # px per char at size 9 / size 8
 GUTTER = 10  # minimum space between a name and its suburb
 
 
-def sites(url, timeout):
+def sites(url, timeout, required=True):
     import gzip
     import urllib.request
     import xml.etree.ElementTree as ET
@@ -104,20 +135,23 @@ def sites(url, timeout):
                 "date": (item.findtext("date") or "").strip(),
             }
         )
-    if not out:
+    if not out and required:
         raise ValueError(f"no priced sites in {url}")
     return out
 
 
-def fetch(timeout):
+def fetch(product, timeout):
     """Pull the feeds and replace the cache atomically. Raises on failure,
     which leaves the previous good data in place."""
-    state = sites(URL, timeout)
+    url = URL.format(product)
+    state = sites(url, timeout)
     local = state
     if REGIONS:
         local = []
         for r in REGIONS:
-            local += sites(f"{URL}&Region={r}", timeout)
+            # A region with none of this fuel is normal (no E85 in
+            # East/Hills), not a failed fetch.
+            local += sites(f"{url}&Region={r}", timeout, required=False)
 
     # Ties are common (whole chains price identically), so break them by name
     # to keep the list stable between refreshes.
@@ -128,29 +162,57 @@ def fetch(timeout):
         "count": len(state),
         "cheapest": local[:TOP],
     }
-    tmp = CACHE + ".tmp"
+    cache = paths(product)[0]
+    tmp = cache + ".tmp"
     with open(tmp, "w") as f:
         json.dump(data, f)
-    os.replace(tmp, CACHE)
+    os.replace(tmp, cache)
     return data
 
 
-def refresh():
+def touch(path):
+    with open(path, "a"):
+        pass
+    os.utime(path)
+
+
+def refresh(product):
     """Fetch now under the lock. If a refresh is already running this one is
     redundant and just leaves."""
-    with open(LOCK, "w") as lk:
+    _, lock, attempt = paths(product)
+    with open(lock, "w") as lk:
         try:
             fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             return 0
-        with open(ATTEMPT, "a"):
-            pass
-        os.utime(ATTEMPT)
+        touch(attempt)
         try:
-            fetch(30)
+            fetch(product, 30)
         except Exception as exc:
             print(f"refresh failed: {exc}", file=sys.stderr)
             return 1
+    return 0
+
+
+def refreshing(product):
+    """True while a --refresh holds this product's lock."""
+    try:
+        with open(paths(product)[1], "a") as lk:
+            fcntl.flock(lk, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        return False
+    except OSError:
+        return True
+
+
+def cycle(step):
+    """Select the next (+1) or previous (-1) product. The render picks it up
+    on its next tick and starts a fetch itself if the cache needs one."""
+    order = list(PRODUCTS)
+    p = order[(order.index(selected()) + step) % len(order)]
+    tmp = CHOICE + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(p)
+    os.replace(tmp, CHOICE)
     return 0
 
 
@@ -210,10 +272,10 @@ def fit(name, suburb):
     return name
 
 
-def header(right=""):
+def header(product, right=""):
     return (
         f"${{color1}}${{font {FONT}:size=10}}{GLYPH}${{font}}  "
-        f"${{color5}}${{font {FONT}:size=8}}FUEL · ULP 91"
+        f"${{color5}}${{font {FONT}:size=8}}FUEL · {PRODUCTS[product]}"
         f"${{alignr}}{right}${{font}}"
     )
 
@@ -221,46 +283,39 @@ def header(right=""):
 def main():
     os.makedirs(CACHE_DIR, exist_ok=True)
 
-    if len(sys.argv) > 1 and sys.argv[1] == "--refresh":
-        return refresh()
+    arg = sys.argv[1] if len(sys.argv) > 1 else ""
+    if arg == "--refresh":
+        return refresh(sys.argv[2] if len(sys.argv) > 2 else selected())
+    if arg == "--cycle":
+        return cycle(int(sys.argv[2]) if len(sys.argv) > 2 else 1)
 
+    product = selected()
+    cache, _, attempt = paths(product)
     today = dt.date.today().isoformat()
     data = None
     try:
-        with open(CACHE) as f:
+        with open(cache) as f:
             data = json.load(f)
     except Exception:
         pass
 
-    if data is None and since(ATTEMPT) is None:
-        # Nothing to show at all: one synchronous fetch so the card is
-        # populated on first paint rather than blank for a whole interval.
-        try:
-            data = fetch(10)
-        except Exception:
-            pass
-        with open(ATTEMPT, "a"):
-            pass
-        os.utime(ATTEMPT)
-    else:
-        stale = (
-            data is None
-            or data.get("date") != today
-            or (since(CACHE) or 0) >= TTL
+    stale = data is None or data.get("date") != today or since(cache) >= TTL
+    last = since(attempt)
+    if stale and (last is None or last >= RETRY) and not refreshing(product):
+        # Detached, even with nothing cached: this runs every second and a
+        # click must never freeze the card on a fetch. Output must be
+        # discarded or execpi waits on us.
+        subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "--refresh", product],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
-        last = since(ATTEMPT)
-        if stale and (last is None or last >= RETRY):
-            # Detached. Output must be discarded or execpi waits on us.
-            subprocess.Popen(
-                [sys.executable, os.path.abspath(__file__), "--refresh"],
-                start_new_session=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
 
     if data is None:
-        print(header())
-        print("${voffset 2}${color5}waiting for FuelWatch")
+        print(header(product))
+        msg = "fetching" if refreshing(product) or last is None else "no data yet"
+        print(f"${{voffset 2}}${{color5}}{msg} from FuelWatch")
         return 0
 
     # The date is the day the prices are FOR, not when they were fetched.
@@ -273,7 +328,7 @@ def main():
     if data.get("date") != today:
         stamp = f"${{color7}}{stamp}${{color5}}"
 
-    print(header(stamp))
+    print(header(product, stamp))
     print(
         f"${{voffset 2}}${{color3}}${{font {FONT}:bold:size=15}}"
         f"{data['avg']:.1f}${{font}}"

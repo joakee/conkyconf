@@ -27,10 +27,12 @@ drawing helpers and Python data-source scripts.
   card's header to fetch immediately (`lua/weather.lua` → `bin/weather.py
   --refresh`): it turns yellow while fetching and red if the fetch failed.
   - Potentially looking to implement other data sources in the future
-- Fuel prices (unleaded 91) come from FuelWatch WA's public RSS feed: the
+- Fuel prices come from FuelWatch WA's public RSS feed: the
   statewide average across every reporting site, then the five cheapest in
   Perth metro (FuelWatch regions 25/26/27; `FUEL_REGIONS` to change).
   WA prices change once a day at 06:00; the date in the header turns red if
   the cached prices are not today's.
+  Click the fuel label in the card's header to cycle ULP 91 → PULP 95 →
+  PULP 98 → diesel → brand diesel → LPG → E85 (right-click goes back).
 - `bin/reflow.py` re-reads the monitor head origin on every pass so a monitor
   hotplug doesn't strand the widget stack off-screen.
