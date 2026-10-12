@@ -1,5 +1,5 @@
 Custom gruvbox-dark Conky desktop widget stack: rounded gruvbox-themed cards
-for CPU, memory, weather, now-playing, and battery status, driven by Lua
+for CPU, memory, weather, fuel prices, now-playing, and battery status, driven by Lua
 drawing helpers and Python data-source scripts.
 
 <img height="600" alt="image" src="https://github.com/user-attachments/assets/fbb91432-a957-4726-8d8b-b4aab1edbae2" />
@@ -10,10 +10,10 @@ drawing helpers and Python data-source scripts.
 - `start.sh` — launches the widget stack.
 - `widget-common.lua` — shared drawing/layout helpers used by all widgets.
 - `lua/` — per-widget Lua rendering (`draw.lua`, `batteries.lua`, `nowplaying.lua`).
-- `bin/` — Python data-source scripts (weather, battery, AirPods, now-playing,
+- `bin/` — Python data-source scripts (weather, fuel, battery, AirPods, now-playing,
   head/reflow window management, focus dimming).
 - `widgets/` — individual widget `.conf` definitions (CPU, memory, weather,
-  now-playing, batteries).
+  fuel, now-playing, batteries).
 - `attic/` — earlier/replaced versions kept for reference.
 
 ## Notes
@@ -27,5 +27,10 @@ drawing helpers and Python data-source scripts.
   card's header to fetch immediately (`lua/weather.lua` → `bin/weather.py
   --refresh`): it turns yellow while fetching and red if the fetch failed.
   - Potentially looking to implement other data sources in the future
+- Fuel prices (unleaded 91) come from FuelWatch WA's public RSS feed: the
+  statewide average across every reporting site, then the five cheapest in
+  Perth metro (FuelWatch regions 25/26/27; `FUEL_REGIONS` to change).
+  WA prices change once a day at 06:00; the date in the header turns red if
+  the cached prices are not today's.
 - `bin/reflow.py` re-reads the monitor head origin on every pass so a monitor
   hotplug doesn't strand the widget stack off-screen.
