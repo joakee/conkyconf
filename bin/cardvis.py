@@ -8,6 +8,9 @@ reopens the gap when it returns, so nothing else has to know.
 X is only touched on a change. The last state applied is cached per conky
 pid, so a restarted card -- which always comes up mapped -- is caught too, and
 python-xlib is only imported then: a normal tick costs a small file read.
+A SIGUSR1 reload maps the window again as well, without changing the pid, so
+the cache is also keyed on <name>.placed, which widget-common.lua rewrites on
+every config load (bin/reflow.py reloads cards to pin their position).
 """
 
 import os
@@ -73,7 +76,12 @@ def set_visible(name, want):
     applied by this same conky process."""
     state = os.path.join(STATE_DIR, name + ".visible")
     wm_state_saved, pos_saved = state + ".wmstate", state + ".pos"
-    key = "%d %s" % (conky_pid(), "shown" if want else "hidden")
+    try:
+        with open(os.path.join(STATE_DIR, name + ".placed")) as f:
+            loaded = f.read().split()[-1]      # uptime of the last config load
+    except (OSError, IndexError):
+        loaded = "-"
+    key = "%d %s %s" % (conky_pid(), loaded, "shown" if want else "hidden")
     try:
         with open(state) as f:
             if f.read() == key:
@@ -88,7 +96,13 @@ def set_visible(name, want):
         if card is None:
             return                     # not mapped yet at startup; next tick
         NET_WM_STATE = d.intern_atom("_NET_WM_STATE")
-        if want:
+        if want and card.get_attributes().map_state == X.IsViewable:
+            # Already up -- a reload maps the window itself, already where
+            # bin/reflow.py pinned it. The saved position is from whenever the
+            # card last hid, so restoring it here would only knock it out of
+            # place for the watcher to move back.
+            pass
+        elif want:
             try:
                 with open(wm_state_saved) as f:
                     names = f.read().split()

@@ -36,3 +36,4 @@ drawing helpers and Python data-source scripts.
   PULP 98 → diesel → brand diesel → LPG → E85 (right-click goes back).
 - `bin/reflow.py` re-reads the monitor head origin on every pass so a monitor
   hotplug doesn't strand the widget stack off-screen.
+- Updated to target the window positioning changes introduced in Conky 1.25. YMMV for older versions

@@ -81,9 +81,10 @@ M.HALF_W = math.floor((M.CARD_W - M.GAP) / 2)
 -- nominal conky places the cards below it by, since it reads gap_y once at
 -- startup and never again. bin/reflow.py removes that limitation: it watches
 -- the cards and re-derives every position from the heights actually on screen,
--- so an auto card anywhere in the stack keeps its gaps as it resizes. Still
--- give it a sensible height here -- it is what the stack looks like in the
--- moment before the watcher's first pass, and if the watcher is not running.
+-- so an auto card anywhere in the stack keeps its gaps as it resizes, and pins
+-- each card to its spot (see M.card). Still give it a sensible height here --
+-- it is what the stack looks like in the moment before the watcher's first
+-- pass, and if the watcher is not running.
 M.stack = {
   { name = 'cpu',       h = 132, interval = 1  },
   { name = 'memory',    h = 127, interval = 2  },
@@ -94,8 +95,51 @@ M.stack = {
   { name = 'countdowns', h = 90,  interval = 1,  auto = true },
 }
 
+-- ── pinned positions ──────────────────────────────────────────
+-- Conky 1.25 puts its window back at gap_x/gap_y on EVERY update, so a card
+-- bin/reflow.py has moved is dragged back to its nominal spot within one
+-- update_interval and moved again by the watcher -- the card bobs. gap_y can
+-- not be changed at runtime from a lua_load script (that runs in a separate Lua
+-- state from the config), but a SIGUSR1 reload re-runs this file and keeps the
+-- same window. So the watcher writes the spot it wants to <name>.place and
+-- signals the card, and M.card reads it here. Both are in layout terms:
+-- `top` from the head's top edge and `inset` from its aligned edge, the two
+-- numbers the nominal gap_y/gap_x are derived from below.
+--
+-- <name>.placed records what this conky was actually configured with, as
+-- "top inset uptime": the watcher compares it with what it wants, to know
+-- whether a reload is needed, and bin/cardvis.py watches it change to notice a
+-- reload (which maps the window again).
+M.RUNDIR = (os.getenv('XDG_RUNTIME_DIR') or '/tmp') .. '/conky-gruvbox'
+
+local function first_line(path)
+  local fh = io.open(path)
+  if not fh then return nil end
+  local line = fh:read('*l')
+  fh:close()
+  return line
+end
+
+local function pinned(name)
+  local top, inset = (first_line(M.RUNDIR .. '/' .. name .. '.place') or '')
+                       :match('^(%-?%d+) (%-?%d+)$')
+  if top then return tonumber(top), tonumber(inset) end
+end
+
+local function record(name, top, inset)
+  local up = (first_line('/proc/uptime') or ''):match('^(%S+)') or '0'
+  os.execute("mkdir -p '" .. M.RUNDIR .. "'")
+  local path = M.RUNDIR .. '/' .. name .. '.placed'
+  local fh = io.open(path .. '.tmp', 'w')
+  if not fh then return end
+  fh:write(string.format('%d %d %s\n', top, inset, up))
+  fh:close()
+  os.rename(path .. '.tmp', path)
+end
+
 -- Build the conky.config table for one card, deriving its y position
--- from the heights of every card above it in the stack.
+-- from the heights of every card above it in the stack -- or from the spot
+-- bin/reflow.py has pinned it to, if it has.
 function M.card(name)
   local top, card, lh = M.TOP, nil, 0
   for _, s in ipairs(M.stack) do
@@ -121,6 +165,11 @@ function M.card(name)
     if card.half ~= near then indent = M.HALF_W + M.GAP end
   end
 
+  local inset = M.SIDE + indent
+  local pin_top, pin_inset = pinned(name)
+  if pin_top then top, inset = pin_top, pin_inset end
+  record(name, top, inset)
+
   local p = M.pal
   return {
     default_color = p.fg1,
@@ -144,7 +193,7 @@ function M.card(name)
 
     alignment           = M.ALIGN,
     xinerama_head       = M.HEAD,
-    gap_x               = M.SIDE + M.SHIFT + indent,
+    gap_x               = inset + M.SHIFT,
     gap_y               = top + M.SHIFT,
     minimum_width       = width,
     maximum_width       = width,

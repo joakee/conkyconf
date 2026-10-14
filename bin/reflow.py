@@ -9,11 +9,19 @@ shorter when nothing is playing. Anything below such a card is then stranded:
 the stack keeps a tidy 12 px gap everywhere except under whichever card has
 shrunk, where it opens up to 82.
 
-Conky does not fight a correction. It resizes its window without ever
-repositioning it -- measured, not assumed: a probe card whose text height
-flipped repeatedly stayed at exactly the y it had been moved to. So this needs
-no cooperation from the widgets at all. Watch the cards; whenever one changes
-height, re-derive every y below it from the heights actually on screen.
+Watch the cards; whenever one changes height, re-derive every y below it from
+the heights actually on screen, and move the cards there.
+
+Moving them is not enough on its own any more. Conky 1.24 left a card where it
+had been moved, but 1.25 puts the window back at its configured gap_x/gap_y on
+every update, so a moved card was dragged back within one update_interval and
+moved again by the next pass here: it bobbed between the two, every 5 s for the
+batteries card. gap_y can not be changed from inside a running card, but a
+SIGUSR1 reload re-reads the config while keeping the same window, so each move
+is also PINNED (see Pins): the spot is written where widget-common.lua's
+M.card will read it, and the card is reloaded, after which conky's idea of
+where the card belongs is this one's. The direct move still happens first, so
+the stack closes up at once rather than after the reload's one-second pause.
 
 Stack order, the first card's offset and the gap are read from
 widget-common.lua, so that file stays the single source of truth for layout
@@ -50,6 +58,8 @@ import fcntl
 import os
 import re
 import select
+import signal
+import subprocess
 import sys
 import time
 from collections import namedtuple
@@ -71,8 +81,9 @@ except ImportError:                                          # pragma: no cover
 
 COMMON = os.path.expanduser("~/.config/conky/gruvbox-dark/widget-common.lua")
 PREFIX = "conky-gruvbox-"
-LOCK = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp",
-                    "conky-gruvbox", "reflow.lock")
+RUNDIR = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp",
+                      "conky-gruvbox")
+LOCK = os.path.join(RUNDIR, "reflow.lock")
 
 # A resize arrives as a burst of events; wait for it to stop before moving
 # anything, so the stack settles in one step instead of shuffling.
@@ -85,6 +96,31 @@ IDLE_POLL = 5.0
 # than close the stack up over a gap that is about to be filled -- but only for
 # so long, or a card that has genuinely died would strand the gap for good.
 STARTUP_GRACE = 20.0
+# A reload takes conky a second (it sleeps for one on purpose). Until its
+# <name>.placed shows the new spot, do not signal it again for the same one.
+PIN_WAIT = 3.0
+# A card whose OWN size has just changed is left where it is until the size
+# has held for this long, and only then moved and pinned. Reloading conky while
+# its window is mid-resize can wedge it: the reload takes the window's size
+# from the server, a resize still in flight then arrives against conky's new
+# idea of it, and conky reads the mismatch as the user resizing the window --
+# it sets fixed_size and never sizes the window to its text again, which a
+# reload does not undo. Measured: a reload sent ~0.7 s after the text shrank
+# froze the card at its old height. Cards that only move because something
+# above them changed keep their size, so they are not held up.
+SIZE_SETTLE = 2.0
+# Holding back the card's own resizes is not enough: its text can change at
+# any moment, and it changing around a reload wedges conky just the same
+# (measured: text changed 0.2 s before the signal, frozen in 2 runs of 3 --
+# conky is asleep in the reload by then, so the resize lands right after it).
+# So a card whose size changed between RESCUE_BEFORE before the signal and
+# RESCUE_AFTER after the reload finished is restarted, which is the only thing
+# that clears fixed_size. That costs a blink of about half a second, which is
+# why it is not simply done instead of every reload. A resize later than that
+# is an ordinary one.
+RESCUE_BEFORE = 1.0
+RESCUE_AFTER = 0.6
+RELOAD_POLL = 0.25
 
 
 def single_instance():
@@ -271,7 +307,8 @@ def discover(d, root):
 
 
 def plan(cards, anchor, lay):
-    """[(name, client, (x, y) now, (x, y) wanted)] for every card present.
+    """[(name, client, (x, y) now, (x, y) wanted, (width, height))] for
+    every card present.
 
     A card that is not running reserves no space -- if a widget has died or
     been switched off, the stack should close up over it rather than leave a
@@ -308,11 +345,11 @@ def plan(cards, anchor, lay):
                 g = frame.get_geometry()
             except xerror.XError:
                 continue
-            here.append((s["name"], client, (g.x, g.y), g.width))
+            here.append((s["name"], client, (g.x, g.y), (g.width, g.height)))
             height = max(height, g.height)
         if not here:
             continue
-        span = sum(w for _, _, _, w in here) + lay.gap * (len(here) - 1)
+        span = sum(sz[0] for _, _, _, sz in here) + lay.gap * (len(here) - 1)
         if col_rows and y + height > anchor.limit:
             offset += col_w + lay.gap     # next column, back at the top
             y, col_w, col_rows = anchor.top, 0, 0
@@ -323,9 +360,9 @@ def plan(cards, anchor, lay):
             x = anchor.left + anchor.width - lay.side - offset - span
         else:
             x = anchor.left + lay.side + offset
-        for name, client, cur, w in here:
-            out.append((name, client, cur, (x, y)))
-            x += w + lay.gap
+        for name, client, cur, sz in here:
+            out.append((name, client, cur, (x, y), sz))
+            x += sz[0] + lay.gap
         y += height + lay.gap
         col_w, col_rows = max(col_w, span), col_rows + 1
     return out
@@ -356,8 +393,8 @@ def apply(d, moves, verbose=False, refused=None):
     renumbered away, configure(y=1114) was declined outright, while
     configure(x=1948, y=1114) was honoured immediately.
     """
-    n = 0
-    for name, client, cur, want in moves:
+    moved = []
+    for name, client, cur, want, _ in moves:
         if cur == want:
             if refused is not None:
                 refused.pop(name, None)          # it landed; that is settled
@@ -370,12 +407,206 @@ def apply(d, moves, verbose=False, refused=None):
             continue
         if refused is not None:
             refused[name] = want
-        n += 1
+        moved.append(name)
         if verbose:
             print("%-12s %d,%d -> %d,%d" % ((name,) + cur + want), flush=True)
-    if n:
+    if moved:
         d.sync()
-    return n
+    return moved
+
+
+# ── pinning ───────────────────────────────────────────────────
+def spot(want, width, anchor, lay):
+    """A root position as M.card counts it: (top, inset), `top` from the head's
+    top edge and `inset` from its aligned edge to the card's near side."""
+    top = want[1] - (anchor.top - lay.top)
+    if lay.align == "top_right":
+        inset = anchor.left + anchor.width - (want[0] + width)
+    else:
+        inset = want[0] - anchor.left
+    return top, inset
+
+
+def conky_pids():
+    """card name -> pid of the conky running it, read off its `-c
+    widgets/NN-name.conf` argument. Neither the card nor its window can say:
+    conky sets no _NET_WM_PID, and with `background = true` it forks after
+    loading its config, so the pid the config sees at startup is gone a moment
+    later."""
+    out = {}
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open("/proc/%s/cmdline" % entry, "rb") as fh:
+                argv = fh.read().split(b"\0")
+        except OSError:
+            continue
+        if os.path.basename(argv[0]) != b"conky":
+            continue
+        for flag, arg in zip(argv, argv[1:]):
+            if flag in (b"-c", b"--config"):
+                m = re.match(r"(?:\d+-)?(.+)\.conf$",
+                             os.path.basename(arg.decode(errors="replace")))
+                if m:
+                    out[m.group(1)] = int(entry)
+    return out
+
+
+class Pins:
+    """Make each card's own configured position agree with the plan.
+
+    Conky 1.25 re-applies gap_x/gap_y on every update (see the module notes),
+    so a card is only really settled once its config says where it is. The
+    card's config records what it was given in <name>.placed; when that is not
+    the spot the plan wants, write <name>.place and SIGUSR1 the card's conky,
+    whose reload reads it back through M.card.
+
+    A reload can wedge a card that resizes around it (see SIZE_SETTLE and
+    RESCUE_BEFORE), so each one is watched until RESCUE_AFTER past its
+    completion, and the card restarted if its size moved in that window.
+
+    Only cards on screen are pinned -- plan() leaves hidden ones out, which
+    matters because a reload maps the window again. And only a spot the WM
+    has accepted, or is being asked for in this same pass: pinning one it
+    refused would have conky ask for it again on every update. A card that
+    has never written .placed (started from an older widget-common.lua) is
+    left alone; the direct moves still apply to it.
+    """
+
+    def __init__(self, changes, verbose=False):
+        self.verbose = verbose
+        self.changes = changes       # name -> recent resize times, see watch
+        self.sent = {}               # name -> (pid, spot, give up waiting at)
+        self.checks = {}             # name -> [pid, sent at, loaded, due]
+
+    @staticmethod
+    def loaded(name):
+        """The token <name>.placed carries for its last config load."""
+        try:
+            with open(os.path.join(RUNDIR, name + ".placed")) as fh:
+                return fh.read().split()[-1]
+        except (OSError, IndexError):
+            return None
+
+    def due(self):
+        """When the next rescue check falls due, or None. A reload nothing has
+        been seen of yet is looked for every RELOAD_POLL: when it lands is
+        what the rescue window is measured from, and it may bring no X event
+        to wake a pass."""
+        times = [c[3] if c[3] is not None else time.monotonic() + RELOAD_POLL
+                 for c in self.checks.values()]
+        return min(times) if times else None
+
+    def rescue(self, now):
+        for name, check in list(self.checks.items()):
+            pid, sent, loaded, due = check
+            if due is None:
+                if self.loaded(name) != loaded:
+                    check[3] = now + RESCUE_AFTER   # reloaded; watch a while
+                elif now > sent + 2 * PIN_WAIT:
+                    del self.checks[name]           # never reloaded; let go
+                continue
+            if now < due:
+                continue
+            del self.checks[name]
+            hits = [t for t in self.changes.get(name, ())
+                    if sent - RESCUE_BEFORE <= t <= due]
+            if hits:
+                if self.verbose:
+                    print("%-12s size changed %+.1f s from its reload signal"
+                          % (name, hits[0] - sent), flush=True)
+                self.restart(name, pid)
+
+    def restart(self, name, pid):
+        """Replace the card's conky with a fresh one, run exactly as before:
+        same command line, environment and working directory."""
+        try:
+            with open("/proc/%d/cmdline" % pid, "rb") as fh:
+                argv = [a.decode() for a in fh.read().split(b"\0") if a]
+            with open("/proc/%d/environ" % pid, "rb") as fh:
+                env = dict(e.decode(errors="replace").split("=", 1)
+                           for e in fh.read().split(b"\0") if b"=" in e)
+            cwd = os.readlink("/proc/%d/cwd" % pid)
+            os.kill(pid, signal.SIGTERM)
+        except (OSError, ValueError):
+            return
+        for _ in range(60):                  # let it take its window down
+            if not os.path.exists("/proc/%d" % pid):
+                break
+            time.sleep(0.05)
+        try:
+            subprocess.Popen(argv, env=env, cwd=cwd, start_new_session=True,
+                             stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        except OSError:
+            return
+        if self.verbose:
+            print("%-12s resized around its reload; restarted" % name,
+                  flush=True)
+
+    @staticmethod
+    def placed(name):
+        try:
+            with open(os.path.join(RUNDIR, name + ".placed")) as fh:
+                top, inset = fh.read().split()[:2]
+            return int(top), int(inset)
+        except (OSError, ValueError):
+            return None
+
+    @staticmethod
+    def write(name, where):
+        """Make <name>.place say `where`, if it does not already."""
+        path = os.path.join(RUNDIR, name + ".place")
+        try:
+            with open(path) as fh:
+                if fh.read() == "%d %d\n" % where:
+                    return
+        except OSError:
+            pass
+        with open(path + ".tmp", "w") as fh:
+            fh.write("%d %d\n" % where)
+        os.replace(path + ".tmp", path)
+
+    def sync(self, moves, moved, anchor, lay):
+        now, pids = time.monotonic(), None
+        self.rescue(now)
+        for name, _, cur, want, (width, _) in moves:
+            if cur != want and name not in moved:
+                continue                      # refused, or not ours to pin yet
+            have = self.placed(name)
+            if have is None:
+                continue
+            where = spot(want, width, anchor, lay)
+            # Even when the card is configured right already: a reload sent
+            # for an earlier plan may still be on its way (conky sleeps a
+            # second before it reads the config), and must not find that
+            # plan's spot when it gets there.
+            try:
+                self.write(name, where)
+            except OSError:
+                continue
+            if have == where:
+                self.sent.pop(name, None)
+                continue
+            if pids is None:
+                pids = conky_pids()       # only scan /proc when a pin is due
+            pid = pids.get(name)
+            if pid is None:
+                continue
+            last = self.sent.get(name)
+            if last and last[:2] == (pid, where) and now < last[2]:
+                continue                      # reload already on its way
+            try:
+                os.kill(pid, signal.SIGUSR1)
+            except OSError:
+                continue
+            self.sent[name] = (pid, where, now + PIN_WAIT)
+            self.checks[name] = [pid, now, self.loaded(name), None]
+            if self.verbose:
+                print("%-12s pinned at top %d, inset %d (was %d, %d)"
+                      % ((name,) + where + have), flush=True)
 
 
 # ── modes ─────────────────────────────────────────────────────
@@ -383,12 +614,12 @@ def show(d, root, anchor, lay):
     cards = discover(d, root)
     moves = plan(cards, anchor, lay)
     print("%-12s %6s %12s %12s" % ("card", "h", "at", "want"))
-    for name, client, cur, want in moves:
+    for name, client, cur, want, _ in moves:
         h = cards[name][1].get_geometry().height
         print("%-12s %6d %12s %12s   %s"
               % (name, h, "%d,%d" % cur, "%d,%d" % want,
                  "" if cur == want else "MOVE"))
-    placed = {name for name, _, _, _ in moves}
+    placed = {m[0] for m in moves}
     hidden = [n for n in cards if n not in placed]
     if hidden:
         print("hidden:", ", ".join(hidden))
@@ -405,7 +636,33 @@ def watch(d, root, lay, verbose):
     expected = sum(len(r) for r in lay.rows)
     subscribed = set()
     refused = {}
+    sizes = {}                    # name -> (size, when it was last different)
+    changes = {}                  # name -> times its size changed, last 10 s
+    pins = Pins(changes, verbose)
     grace_until = time.monotonic() + STARTUP_GRACE
+    # Cards restarted by Pins.restart are children of this process; there is
+    # nothing to collect from them, so have the kernel reap them.
+    signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+    wake = None                   # when the next held card is due a pass
+
+    def settled(moves):
+        """The moves that may go ahead now: those not waiting on a card's own
+        resize to settle (see SIZE_SETTLE). Sets `wake` for the rest."""
+        nonlocal wake
+        now, ready, wake = time.monotonic(), [], None
+        for m in moves:
+            name, _, cur, want, size = m
+            if sizes.get(name, (None,))[0] != size:
+                if name in sizes:     # first sight is not a resize
+                    changes[name] = [t for t in changes.get(name, ())
+                                     if t > now - 10] + [now]
+                sizes[name] = (size, now)
+            due = sizes[name][1] + SIZE_SETTLE
+            if cur == want or now >= due:
+                ready.append(m)
+            else:
+                wake = due if wake is None else min(wake, due)
+        return ready
 
     def settle(retry=False):
         nonlocal grace_until, anchor
@@ -436,13 +693,21 @@ def watch(d, root, lay, verbose):
             grace_until = time.monotonic() + STARTUP_GRACE   # arm for next time
         elif time.monotonic() < grace_until:
             return
-        apply(d, plan(cards, anchor, lay), verbose, refused)
+        moves = settled(plan(cards, anchor, lay))
+        pins.sync(moves, apply(d, moves, verbose, refused), anchor, lay)
 
     settle()
     while True:
-        ready, _, _ = select.select([d.fileno()], [], [], IDLE_POLL)
-        idle = not ready             # a timeout is the periodic safety pass
-        touched = idle
+        timeout = IDLE_POLL
+        due = [t for t in (wake, pins.due()) if t is not None]
+        if due:
+            timeout = min(timeout, max(0.0, min(due) - time.monotonic()))
+        ready, _, _ = select.select([d.fileno()], [], [], timeout)
+        # A timeout is the periodic safety pass -- unless it was only cut short
+        # for a card that has finished settling, or a rescue check.
+        held = not ready and timeout < IDLE_POLL
+        idle = not ready and not held
+        touched = not ready
         while d.pending_events():
             d.next_event()
             touched = True

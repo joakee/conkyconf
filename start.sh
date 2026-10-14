@@ -18,6 +18,11 @@ pkill -x conky 2>/dev/null
 # let the WM/panel settle so placement lands on the right Xinerama head
 sleep "${CONKY_DELAY:-5}"
 
+# Positions bin/reflow.py pinned for the last run's cards (see M.card): start
+# from the stack table instead, rather than from a layout that may have been
+# for another monitor arrangement. The watcher re-pins whatever needs it.
+rm -f "${XDG_RUNTIME_DIR:-/tmp}"/conky-gruvbox/*.place
+
 for conf in "$DIR"/widgets/*.conf; do
     "$CONKY" -c "$conf" >/dev/null 2>&1 &
 done
