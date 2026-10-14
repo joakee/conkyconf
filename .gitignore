@@ -1,3 +1,10 @@
 __pycache__/
 *.pyc
 *.pre-*
+
+# makepkg output under arch/
+arch/src/
+arch/pkg/
+arch/conkyconf/
+arch/*.pkg.tar.*
+arch/*.log

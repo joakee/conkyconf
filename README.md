@@ -15,6 +15,22 @@ drawing helpers and Python data-source scripts.
 - `widgets/` — individual widget `.conf` definitions (CPU, memory, weather,
   fuel, now-playing, batteries).
 - `attic/` — earlier/replaced versions kept for reference.
+- `arch/` — Arch Linux package (`PKGBUILD`) and its `conky-gruvbox-dark` setup command.
+
+## Installing on Arch
+
+```sh
+cd arch && makepkg -si      # Maple Mono NF CN comes from the AUR (maple-mono-nf-cn)
+conky-gruvbox-dark install  # as your user: copies the stack to ~/.config/conky/gruvbox-dark,
+                            # starts it at login, and starts it now
+```
+
+The package keeps a "clean" copy in `/usr/share/conky-gruvbox-dark`; the widgets
+run from the copy in `~/.config/conky/gruvbox-dark` (edit this one if you wanna customise). 
+At each login, `conky-gruvbox-dark start` brings that copy up to date with the package:
+files you haven't changed are updated, files you have are kept, with the new version
+written beside them as `.pacnew`. `conky-gruvbox-dark uninstall` stops the widgets
+and deletes the login entry
 
 ## Notes
 

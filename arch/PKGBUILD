@@ -1,0 +1,52 @@
+# Maintainer: James Oakey
+
+pkgname=conky-gruvbox-dark-git
+_pkgname=conky-gruvbox-dark
+pkgver=r0
+pkgrel=1
+pkgdesc="Gruvbox-dark conky widget stack: rounded cards for CPU, memory, weather, fuel prices, now playing, batteries and countdowns"
+arch=('any')
+url="https://github.com/joakee/conkyconf"
+license=('LicenseRef-unknown')
+depends=(
+  'conky>=1.25'
+  'imagemagick'
+  'maple-mono-nf-cn'
+  'python'
+  'python-xlib'
+  'systemd'
+  'util-linux'
+)
+makedepends=('git')
+optdepends=(
+  'picom: compositor for the translucent rounded cards and the focus fade'
+  'podctl: AirPods battery levels on the batteries card'
+  'libimobiledevice: iPhone battery level on the batteries card'
+)
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+install="$_pkgname.install"
+source=("conkyconf::git+$url.git"
+        "$_pkgname")
+sha256sums=('SKIP'
+            '31e0714171653855ff89f4506c7808b59a7e3ce999fa48cbebdec717457da581')
+
+pkgver() {
+  cd conkyconf
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+package() {
+  cd conkyconf
+
+  # The stack exactly as it lives in ~/.config/conky/gruvbox-dark, which is
+  # where `conky-gruvbox-dark install` copies it for each user. attic/ is
+  # earlier versions kept for reference, and arch/ is this packaging.
+  local share="$pkgdir/usr/share/$_pkgname"
+  install -d "$share"
+  cp -r --no-preserve=ownership start.sh widget-common.lua bin lua widgets "$share/"
+  find "$share" -name __pycache__ -prune -exec rm -rf {} +
+
+  install -Dm755 "$srcdir/$_pkgname" "$pkgdir/usr/bin/$_pkgname"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$_pkgname/README.md"
+}

@@ -1,0 +1,27 @@
+pkgbase = conky-gruvbox-dark-git
+	pkgdesc = Gruvbox-dark conky widget stack: rounded cards for CPU, memory, weather, fuel prices, now playing, batteries and countdowns
+	pkgver = r0
+	pkgrel = 1
+	url = https://github.com/joakee/conkyconf
+	install = conky-gruvbox-dark.install
+	arch = any
+	license = LicenseRef-unknown
+	makedepends = git
+	depends = conky>=1.25
+	depends = imagemagick
+	depends = maple-mono-nf-cn
+	depends = python
+	depends = python-xlib
+	depends = systemd
+	depends = util-linux
+	optdepends = picom: compositor for the translucent rounded cards and the focus fade
+	optdepends = podctl: AirPods battery levels on the batteries card
+	optdepends = libimobiledevice: iPhone battery level on the batteries card
+	provides = conky-gruvbox-dark
+	conflicts = conky-gruvbox-dark
+	source = conkyconf::git+https://github.com/joakee/conkyconf.git
+	source = conky-gruvbox-dark
+	sha256sums = SKIP
+	sha256sums = 31e0714171653855ff89f4506c7808b59a7e3ce999fa48cbebdec717457da581
+
+pkgname = conky-gruvbox-dark-git

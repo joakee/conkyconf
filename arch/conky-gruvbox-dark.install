@@ -1,0 +1,27 @@
+post_install() {
+  cat <<'EOF'
+==> To set the widgets up for a user, run as that user (not root):
+      conky-gruvbox-dark install
+    It copies the stack to ~/.config/conky/gruvbox-dark, starts it at login
+    and starts it now. A copy already there is kept: files that differ from
+    the package are left alone, with the package's version beside them as
+    .pacnew.
+==> The cards are translucent and rounded only under a compositor (picom).
+EOF
+}
+
+post_upgrade() {
+  cat <<'EOF'
+==> Your copy in ~/.config/conky/gruvbox-dark is brought up to date at your
+    next login, or now with:  conky-gruvbox-dark start
+    Files you have edited are kept; look for .pacnew files beside them.
+EOF
+}
+
+pre_remove() {
+  cat <<'EOF'
+==> The login entry is skipped once the package is gone. To remove it, and
+    your copy, run as each user:  conky-gruvbox-dark uninstall
+    (before removing the package), then delete ~/.config/conky/gruvbox-dark
+EOF
+}
