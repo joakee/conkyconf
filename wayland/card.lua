@@ -45,8 +45,8 @@ c.lua_load = c.lua_load and (compat .. ';' .. c.lua_load) or compat
 -- fade (see compat) over everything, so it is the draw_post hook. A widget's
 -- own hooks are passed on, and called from them: the pre straight after the
 -- background, the post before the fade.
-c.lua_draw_hook_pre = string.format('gruvbox_background %s %d %d %s',
-  w.pal.bg0h, w.ALPHA, w.RADIUS,
+c.lua_draw_hook_pre = string.format('gruvbox_background %s %d %d %s %s',
+  w.pal.bg0h, w.ALPHA, w.RADIUS, file:match('^%d*%-?(.-)%.conf$'),
   (c.lua_draw_hook_pre or ''):gsub('^conky_', ''))
 c.lua_draw_hook_post = 'gruvbox_fade ' ..
   (c.lua_draw_hook_post or ''):gsub('^conky_', '')

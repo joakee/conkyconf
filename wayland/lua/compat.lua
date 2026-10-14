@@ -37,41 +37,82 @@ local function call_hook(name)
   end
 end
 
--- The card's colour, as r, g, b (0-1) and alpha (0-1); set by the pre hook.
+local RUNDIR = (os.getenv('XDG_RUNTIME_DIR') or '/tmp') .. '/conky-gruvbox'
+
+-- The card: colour r, g, b and alpha (0-1), corner radius, and its frosted
+-- backdrop if there is one. Set by the pre hook.
 local card = nil
 
--- The card itself: a rounded rectangle in the colour and alpha conky's own
--- flat fill had, which picom used to round off. Arguments come from card.lua:
--- colour as rrggbb, alpha 0-255, corner radius, and the widget's own
--- draw_pre hook, if it had one, to run afterwards.
-function conky_gruvbox_background(colour, alpha, radius, next_hook)
+-- The piece of blurred wallpaper behind this card, which wayland/bin/stack.py
+-- writes to <card>.backdrop.png; <card>.backdrop is a stamp it changes
+-- whenever it writes a new one. nil until there is one.
+local backdrop = { stamp = false, img = nil }
+
+local function load_backdrop(name)
+  local fh = io.open(RUNDIR .. '/' .. name .. '.backdrop')
+  local stamp = fh and fh:read('*l')
+  if fh then fh:close() end
+  if stamp ~= backdrop.stamp then
+    if backdrop.img then cairo_surface_destroy(backdrop.img) end
+    backdrop.stamp, backdrop.img = stamp, nil
+    if stamp then
+      local img = cairo_image_surface_create_from_png(
+        RUNDIR .. '/' .. name .. '.backdrop.png')
+      if cairo_surface_status(img) == 0 then
+        backdrop.img = img
+      else
+        cairo_surface_destroy(img)
+      end
+    end
+  end
+  return backdrop.img
+end
+
+-- The card itself: its piece of blurred wallpaper, if it has one, under a
+-- rounded rectangle in the colour and alpha conky's own flat fill had (picom
+-- used to round that off, and Wayfire to blur behind it).
+local function paint_card(cr, width, height)
+  cairo_save(cr)
+  rounded(cr, width, height, card.radius)
+  cairo_clip(cr)
+  if card.img then
+    cairo_set_source_surface(cr, card.img, 0, 0)
+    cairo_paint(cr)
+  end
+  cairo_set_source_rgba(cr, card.r, card.g, card.b, card.a)
+  cairo_paint(cr)
+  cairo_restore(cr)
+end
+
+-- The pre hook. Arguments come from card.lua: colour as rrggbb, alpha 0-255,
+-- corner radius, the card's name, and the widget's own draw_pre hook, if it
+-- had one, to run afterwards.
+function conky_gruvbox_background(colour, alpha, radius, name, next_hook)
   if conky_window == nil then return end
   local cs = conky_surface()
   if cs == nil then return end
   local n = tonumber(colour, 16) or 0
-  card = { (n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255,
-           (tonumber(alpha) or 255) / 255, tonumber(radius) or 0 }
+  card = { r = (n >> 16 & 255) / 255, g = (n >> 8 & 255) / 255,
+           b = (n & 255) / 255, a = (tonumber(alpha) or 255) / 255,
+           radius = tonumber(radius) or 0, img = load_backdrop(name) }
   local cr = cairo_create(cs)
-  cairo_set_source_rgba(cr, card[1], card[2], card[3], card[4])
-  rounded(cr, conky_window.width, conky_window.height, card[5])
-  cairo_fill(cr)
+  paint_card(cr, conky_window.width, conky_window.height)
   cairo_destroy(cr)
   return call_hook(next_hook)
 end
 
 -- Fading the card back while a window has the focus (wayland/bin/stack.py
 -- writes the level, 0-1, to LEVEL_FILE and has every card redraw as it
--- changes). Only what is drawn ON the card fades: the background keeps its
--- alpha, because Wayfire's blur goes by alpha -- fade the whole surface, as
--- the X11 cards did, and the wallpaper shows through sharp.
+-- changes). Only what is drawn ON the card fades, into the card behind it;
+-- the card itself stays as it is.
 --
 -- Done after everything else is drawn: scale the whole surface by the level
--- (DEST_IN), then put back, underneath (DEST_OVER), just enough of the card
--- colour that a pixel with nothing on it ends up exactly as it was. For
--- alpha a and level L that is a(1 - L) / (1 - La); anything drawn on the
--- card comes out as L of itself over the card.
-local LEVEL_FILE = (os.getenv('XDG_RUNTIME_DIR') or '/tmp')
-                   .. '/conky-gruvbox/wl-level'
+-- (DEST_IN), then put the card back underneath it (DEST_OVER). With a
+-- backdrop the card is opaque, so that is simply the card again. Without one
+-- it is translucent, and only so much of its colour goes back that a pixel
+-- with nothing on it ends up as it was: for alpha a and level L,
+-- a(1 - L) / (1 - La).
+local LEVEL_FILE = RUNDIR .. '/wl-level'
 
 local function level()
   local fh = io.open(LEVEL_FILE)
@@ -88,14 +129,23 @@ function conky_gruvbox_fade(next_hook)
   if l >= 1 then return end
   local cs = conky_surface()
   if cs == nil then return end
+  local width, height = conky_window.width, conky_window.height
   local cr = cairo_create(cs)
   cairo_set_operator(cr, CAIRO_OPERATOR_DEST_IN)
   cairo_paint_with_alpha(cr, l)
-  local a = card[4]
-  cairo_set_operator(cr, CAIRO_OPERATOR_DEST_OVER)
-  cairo_set_source_rgba(cr, card[1], card[2], card[3],
-                        a * (1 - l) / (1 - l * a))
-  rounded(cr, conky_window.width, conky_window.height, card[5])
-  cairo_fill(cr)
+  if card.img then
+    cairo_push_group(cr)
+    cairo_set_operator(cr, CAIRO_OPERATOR_OVER)
+    paint_card(cr, width, height)
+    cairo_pop_group_to_source(cr)
+    cairo_set_operator(cr, CAIRO_OPERATOR_DEST_OVER)
+    cairo_paint(cr)
+  else
+    local a = card.a
+    cairo_set_operator(cr, CAIRO_OPERATOR_DEST_OVER)
+    cairo_set_source_rgba(cr, card.r, card.g, card.b, a * (1 - l) / (1 - l * a))
+    rounded(cr, width, height, card.radius)
+    cairo_fill(cr)
+  end
   cairo_destroy(cr)
 end

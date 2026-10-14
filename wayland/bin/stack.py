@@ -25,9 +25,12 @@ starting the cards, which start.sh does on X11:
     wayland/bin/cardvis.py) is parked off screen, and the stack closes up
     over it as it does on X11.
 
+  * The cards are frosted: each paints the blurred wallpaper behind it
+    (see Backdrop), which costs the compositor nothing.
+
   * The cards fade back while a window has the focus, to bin/focusdim.py's
-    LEVEL. What is drawn on a card fades; its background does not, so the
-    blur behind it stays as strong (see Stack.dim).
+    LEVEL. What is drawn on a card fades; its frosted background does not
+    (see Stack.dim).
 
 Layout -- the stack table, M.TOP, M.GAP, M.SIDE, M.ALIGN -- is read from
 widget-common.lua by bin/reflow.py's own parser, so there is still one place
@@ -287,6 +290,129 @@ def plan(lay, sizes, hidden, area):
     return out
 
 
+# ── the frosted backdrop ──────────────────────────────────────
+class Backdrop:
+    """What the cards are frosted with: the wallpaper, blurred.
+
+    The cards sit on the bottom layer, straight above xfdesktop, so what is
+    behind a card is always the wallpaper. Blurring it once here, and giving
+    each card the piece behind it to paint under its tint (lua/compat.lua),
+    looks the same as Wayfire's blur -- which re-blurs that region every
+    time a card redraws, and cost a dropped frame or two each second.
+
+    The wallpaper and how it is fitted to the screen are read from
+    xfdesktop's settings for the output, workspace 0; the blurred copy is
+    made with ImageMagick. backdrop-<output>.png is the whole output,
+    <card>.backdrop.png the card's piece of it, and <card>.backdrop a stamp
+    that changes when that piece does, for the card to notice.
+    """
+
+    CHECK = 10.0         # how often the wallpaper setting is looked at, s
+    # Blur radius, in pixels of the full-size wallpaper: about as strong as
+    # [blur] in wayfire.ini (kawase, 3 iterations, offset 2). Done at a
+    # quarter size, which is much faster and looks no different.
+    SIGMA = 20
+
+    def __init__(self):
+        self.key = None          # what backdrop-<output>.png was made from
+        self.path = None
+        self.checked = 0.0
+        self.crops = {}          # name -> (geometry, key) of its piece
+
+    @staticmethod
+    def wallpaper(output):
+        """(image path, xfdesktop image-style) for the output, or None."""
+        def get(prop):
+            try:
+                out = subprocess.run(
+                    ["xfconf-query", "-c", "xfce4-desktop", "-p",
+                     "/backdrop/screen0/monitor%s/workspace0/%s" % (output, prop)],
+                    capture_output=True, text=True, timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+            return out.stdout.strip() if out.returncode == 0 else None
+        image = get("last-image")
+        if not image or not os.path.isfile(image):
+            return None
+        try:
+            style = int(get("image-style") or 5)
+        except ValueError:
+            style = 5
+        return image, style
+
+    def make(self, image, style, width, height, dest):
+        """Fit the image to the output as xfdesktop does, and blur it."""
+        size = "%dx%d" % (width, height)
+        fit = {
+            1: ["-gravity", "center", "-background", "black", "-extent", size],
+            3: ["-resize", size + "!"],
+            4: ["-resize", size, "-gravity", "center", "-background", "black",
+                "-extent", size],
+        }.get(style, ["-resize", size + "^", "-gravity", "center",
+                      "-extent", size])           # 5, zoomed, and the rest
+        cmd = (["magick", image] + fit +
+               ["-resize", "25%", "-blur", "0x%g" % (self.SIGMA / 4),
+                "-resize", size + "!", dest + ".tmp.png"])
+        try:
+            subprocess.run(cmd, check=True, timeout=30,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            os.replace(dest + ".tmp.png", dest)
+            return True
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def update(self, output, size, views, now):
+        """Bring the backdrop and every card's piece up to date. Returns the
+        names of the cards whose piece changed."""
+        if now - self.checked >= self.CHECK or (self.key and self.key[3:] != (output, *size)):
+            self.checked = now
+            paper = self.wallpaper(output)
+            key = None
+            if paper:
+                try:
+                    key = (paper[0], os.stat(paper[0]).st_mtime, paper[1], output, *size)
+                except OSError:
+                    pass
+            if key != self.key:
+                path = os.path.join(RUNDIR, "backdrop-%s.png" % output)
+                if key and self.make(paper[0], paper[1], size[0], size[1], path):
+                    say("backdrop: %s blurred for %s" % (paper[0], output))
+                    self.key, self.path = key, path
+                else:
+                    self.key = self.path = None
+        changed = []
+        for name, v in views.items():
+            g = v["geometry"]
+            geom = (int(g["x"]), int(g["y"]), int(g["width"]), int(g["height"]))
+            if v.get("output-name") != output or geom[1] < 0:
+                continue                     # elsewhere, or parked off screen
+            if self.crops.get(name) == (geom, self.key):
+                continue
+            stamp = os.path.join(RUNDIR, name + ".backdrop")
+            png = stamp + ".png"
+            if self.path:
+                try:
+                    subprocess.run(["magick", self.path, "-crop",
+                                    "%dx%d+%d+%d" % (geom[2], geom[3], geom[0], geom[1]),
+                                    "+repage", png + ".tmp.png"],
+                                   check=True, timeout=10, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL)
+                    os.replace(png + ".tmp.png", png)
+                except (OSError, subprocess.SubprocessError):
+                    continue
+            else:
+                try:
+                    os.remove(png)
+                except OSError:
+                    pass
+            with open(stamp + ".tmp", "w") as fh:
+                fh.write("%f\n" % time.time())
+            os.replace(stamp + ".tmp", stamp)
+            self.crops[name] = (geom, self.key)
+            changed.append(name)
+        return changed
+
+
 # ── the watcher ───────────────────────────────────────────────
 class Stack:
     def __init__(self, wf):
@@ -307,6 +433,7 @@ class Stack:
         self.level = 1.0       # where the cards are now
         self.fade = None       # (from, to, started) while fading
         self.pids = {}         # widget file -> pid, as of the last pass
+        self.backdrop = Backdrop()
 
     # -- starting and restarting --------------------------------
     def supervise(self, pids, now):
@@ -380,6 +507,16 @@ class Stack:
         area = self.wf.call("window-rules/output-info",
                             id=outputs[target]["id"])["workarea"]
 
+        geom = outputs[target]["geometry"]
+        for name in self.backdrop.update(
+                target, (int(geom["width"]), int(geom["height"])), views, now):
+            pid = pids.get(self.files.get(name))
+            if pid:
+                try:
+                    os.kill(pid, signal.SIGUSR2)     # redraw with the new piece
+                except OSError:
+                    pass
+
         hidden = {n for n in self.files if not shown(n)}
         grace = now - self.started < STARTUP_GRACE
         if grace and any(n not in self.sizes for n in self.files):
@@ -422,8 +559,8 @@ class Stack:
         The cards do the fading themselves (lua/compat.lua): this publishes
         the level in LEVEL_FILE and has each card redraw (SIGUSR2, which
         conky takes as "refresh now") for every step of it. Fading the
-        surfaces from the compositor, with the alpha plugin, would fade the
-        blur behind them too."""
+        surfaces from the compositor, with the alpha plugin, would fade their
+        frosted backgrounds with them."""
         now = time.monotonic()
         goal = LEVEL if self.focused_window() else 1.0
         if self.fade and self.fade[1] != goal or not self.fade and self.level != goal:
