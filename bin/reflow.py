@@ -596,12 +596,24 @@ class Pins:
         self.rescue(now)
         for name, _, cur, want, (width, _) in moves:
             have = self.placed(name)
+            # Conky reads the head's geometry when it loads its config, not
+            # when the monitors change -- so a card started before the layout
+            # settled (DP-1 hotplugged at login, eDP-1 pushed down to y=1080)
+            # keeps placing itself against where its head USED to be, while
+            # its .placed already matches the plan. Every move here is then
+            # dragged back on conky's next update, and nothing below reloads
+            # it because the config "is right": the card sits on the wrong
+            # monitor, or bobs between the two. Landing far from where its own
+            # config says is the tell; a reload re-reads the head.
+            adrift = False
             if have is not None and cur != want and name not in self.checks:
                 at = unspot(have, width, anchor, lay)
                 dx, dy = cur[0] - at[0], cur[1] - at[1]
                 if abs(dx) <= BIAS_MAX and abs(dy) <= BIAS_MAX:
                     self.bias[name] = (dx, dy)
-            if cur != want and name not in moved:
+                else:
+                    adrift = True
+            if cur != want and name not in moved and not adrift:
                 continue                      # refused, or not ours to pin yet
             if have is None:
                 continue
@@ -615,7 +627,7 @@ class Pins:
                 self.write(name, where)
             except OSError:
                 continue
-            if have == where:
+            if have == where and not adrift:
                 self.sent.pop(name, None)
                 continue
             if pids is None:
