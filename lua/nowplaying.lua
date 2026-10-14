@@ -15,6 +15,7 @@ pcall(require, 'cairo_xlib')
 local HOME = os.getenv('HOME')
 local w = dofile(HOME .. '/.config/conky/gruvbox-dark/widget-common.lua')
 local D = dofile(HOME .. '/.config/conky/gruvbox-dark/lua/draw.lua')
+local E = dofile(HOME .. '/.config/conky/gruvbox-dark/lua/exec.lua')
 local CACHE = (os.getenv('XDG_RUNTIME_DIR') or '/tmp')
               .. '/conky-gruvbox/nowplaying.lua'
 
@@ -33,6 +34,24 @@ local GLYPH_PLAY  = '\u{F040A}'
 local GLYPH_PAUSE = '\u{F03E4}'
 local GLYPH_STOP  = '\u{F04DB}'
 local GLYPH_NOTE  = '\u{F075A}'
+
+-- The MPRIS players on the bus, for lua/exec.lua: bin/nowplaying.py runs at
+-- once when one opens or closes, every few seconds while any is open, and not
+-- at all while none is -- one busctl call every 2 s is all that costs. If
+-- busctl fails, poll as if a player were open rather than go blind.
+E.key(function()
+  local fh = io.popen('busctl --user --json=short call org.freedesktop.DBus '
+                      .. '/org/freedesktop/DBus org.freedesktop.DBus ListNames 2>/dev/null')
+  if not fh then return '?' end
+  local names, found = fh:read('*a') or '', {}
+  fh:close()
+  if names == '' then return '?' end
+  for n in names:gmatch('"(org%.mpris%.MediaPlayer2%.[^"]+)"') do
+    found[#found + 1] = n
+  end
+  table.sort(found)
+  return table.concat(found, ' ')
+end, 2)
 
 local function clock(sec)
   sec = math.max(0, math.floor(sec or 0))
@@ -74,11 +93,23 @@ local function draw_art(cr, path)
   cairo_stroke(cr)
 end
 
+-- bin/nowplaying.py reads the position only every few seconds; between those
+-- reads, a playing track has moved on by however long it has been since.
+local function position(d)
+  local pos = d.position or 0
+  if d.status == 'Playing' and d.stamp then
+    pos = pos + math.max(0, os.time() - d.stamp)
+    if (d.length or 0) > 0 then pos = math.min(pos, d.length) end
+  end
+  return pos
+end
+
 local function draw_progress(cr, d)
   local x, y = w.PAD, Y0 + ART + 14
+  local pos = position(d)
   local frac = 0
   if (d.length or 0) > 0 then
-    frac = math.min(math.max((d.position or 0) / d.length, 0), 1)
+    frac = math.min(math.max(pos / d.length, 0), 1)
   end
 
   D.rrect(cr, x, y, w.WIDTH, BAR_H, BAR_H / 2)
@@ -92,7 +123,7 @@ local function draw_progress(cr, d)
 
   D.face(cr, 8, false)
   D.rgba(cr, w.pal.fg4, 1)
-  D.left(cr, clock(d.position), x, y - 5)
+  D.left(cr, clock(pos), x, y - 5)
   if (d.length or 0) > 0 then
     D.right(cr, clock(d.length), x + w.WIDTH, y - 5)
   end

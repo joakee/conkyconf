@@ -22,16 +22,25 @@ The card is only on screen while a player has something loaded, playing or
 paused. When it would otherwise read "nothing playing" -- every player closed,
 or none with a track -- it hides itself (bin/cardvis.py) and the stack closes
 up over it.
+
+The card runs this every 3 s while a player is open (busctl and a fresh Python
+are too dear for every second), so a track change can take that long to show;
+while none is, lua/nowplaying.lua sees that from one busctl call and does not
+run it at all. The progress bar and
+elapsed time still move every second: lua/nowplaying.lua advances the position
+from when it was read while the player says it is playing.
 """
 
-import base64
 import hashlib
 import json
 import os
 import subprocess
 import sys
-import urllib.parse
-import urllib.request
+import time
+
+# base64 and urllib are imported in fetch_art(), the only place that needs
+# them: conky runs this every few seconds, and urllib.request alone is ~50 ms
+# of import that a render with the art already cached never uses.
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cardvis                                               # noqa: E402
@@ -109,7 +118,10 @@ def player_state(name):
         "album":    first(meta.get("xesam:album")),
         "art_url":  first(meta.get("mpris:artUrl")),
         "length":   int(meta.get("mpris:length") or 0) // 1000000,
-        "position": int(props.get("Position") or 0) // 1000000,
+        "position": int(props.get("Position") or 0) / 1000000,
+        # When position was read: lua/nowplaying.lua runs the clock on from
+        # here between this script's runs.
+        "stamp":    time.time(),
     }
 
 
@@ -139,6 +151,10 @@ def art_path(url):
 def fetch_art(url, dest):
     """Resolve artUrl to a PNG of exactly ART pixels. Handles the three forms
     players use: an http(s) CDN link, a file:// path, and an inline data: URI."""
+    import base64
+    import urllib.parse
+    import urllib.request
+
     if url.startswith("data:"):
         head, _, payload = url.partition(",")
         raw = base64.b64decode(payload) if ";base64" in head \

@@ -5,6 +5,8 @@
   The fetch runs detached in bin/weather.py --refresh, so the conky process
   never blocks on the network. That script's lock is what the render reads to
   turn the icon into a yellow sync glyph while it runs, red if it failed.
+  The card renders every 30 s (lua/exec.lua), so a click also switches it to
+  every second for long enough to see the refresh through.
 
   Also draws the 24 h temperature and rainfall graphs at the bottom of the
   card, from lua_draw_hook_post. bin/weather.py decides which graphs show (no
@@ -20,6 +22,7 @@ local HOME   = os.getenv('HOME')
 local SCRIPT = HOME .. '/.config/conky/gruvbox-dark/bin/weather.py'
 local w = dofile(HOME .. '/.config/conky/gruvbox-dark/widget-common.lua')
 local D = dofile(HOME .. '/.config/conky/gruvbox-dark/lua/draw.lua')
+local E = dofile(HOME .. '/.config/conky/gruvbox-dark/lua/exec.lua')
 local GRAPHS = (os.getenv('XDG_RUNTIME_DIR') or '/tmp')
                .. '/conky-gruvbox/weather-graphs.lua'
 
@@ -47,6 +50,9 @@ function conky_weather_mouse(ev)
   -- setsid + discarded output: detached, so neither this hook nor conky's
   -- main loop waits on BOM.
   os.execute('setsid -f ' .. SCRIPT .. ' --refresh >/dev/null 2>&1 </dev/null')
+  -- Render every second until the fetch (20 s timeout) has had time to land,
+  -- so the icon shows it running and the new reading appears at once.
+  E.hot(25)
   return true
 end
 

@@ -48,6 +48,7 @@ Needs python-xlib. Everything else is stdlib.
 """
 
 import fcntl
+import glob
 import os
 import select
 import signal
@@ -92,6 +93,13 @@ LEVEL_FILE = os.path.join(RUNDIR, "dim-level")
 DEBOUNCE = 0.05
 # Safety net for anything that slips past the event mask.
 IDLE_POLL = 5.0
+# Finding the cards walks the whole window tree, which with a browser open is
+# hundreds of X round trips -- a CPU spike every IDLE_POLL when it ran on every
+# pass. The cards found are kept and only re-checked; the tree is walked again
+# when one has gone, fewer are known than there are widgets, or after this long.
+REDISCOVER = 60.0
+WIDGETS = os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "widgets", "*.conf")
 # The poll used instead while a write is being held back by the slide
 # interlock. A slide is over in well under a second, so this only ever runs a
 # handful of times, and it bounds how long the cards can stay at the wrong
@@ -121,6 +129,8 @@ class Dimmer:
         self.a_active = d.intern_atom("_NET_ACTIVE_WINDOW")
         self.a_sticky = d.intern_atom("_PICOM_SLIDE_STICKY")
         self.cards = {}          # name -> client window
+        self.walked = None       # when the window tree was last walked
+        self.expected = len(glob.glob(WIDGETS))
         self.subscribed = set()
         self.want = None         # the value last decided on, dim or opaque
         self.deferred = False    # a write held back by the slide interlock
@@ -132,7 +142,15 @@ class Dimmer:
         The CLIENT is what is wanted here, not xfwm4's frame: picom is run with
         detect-client-opacity, and picom-slide-switch writes to the client too
         (wmctrl reports client ids), so both writers land on the same window.
+
+        The walk is skipped while the cards from the last one are all still
+        there (see REDISCOVER).
         """
+        if (self.cards and len(self.cards) >= self.expected
+                and self.walked is not None
+                and time.monotonic() - self.walked < REDISCOVER
+                and self.still_there()):
+            return self.cards
         found = {}
 
         def walk(w, depth):
@@ -154,6 +172,7 @@ class Dimmer:
 
         walk(self.root, 0)
         self.cards = found
+        self.walked = time.monotonic()
         for w in found.values():
             if w.id in self.subscribed:
                 continue
@@ -163,6 +182,15 @@ class Dimmer:
             except xerror.XError:
                 pass
         return found
+
+    def still_there(self):
+        for name, w in self.cards.items():
+            try:
+                if w.get_wm_name() != PREFIX + name:
+                    return False
+            except Exception:
+                return False
+        return True
 
     # ── the decision ──────────────────────────────────────────
     def focused(self):

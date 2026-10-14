@@ -91,6 +91,12 @@ DEBOUNCE = 0.08
 # Safety net for anything that slips past the event mask (a card restarted by
 # hand, say). Cheap: a handful of X round trips.
 IDLE_POLL = 5.0
+# Finding the cards means walking the whole window tree, ~250 windows and two
+# round trips each with a browser open: most of the cost of a pass, and once
+# it ran every IDLE_POLL it was a CPU spike every 5 s. So the cards found are
+# kept and only re-checked, and the tree is walked again only when one of them
+# has gone, fewer than the stack's cards are known, or this long has passed.
+REDISCOVER = 60.0
 # Cards are launched together but map one by one, and the same is true when
 # the stack is restarted by hand. While any card is missing, sit still rather
 # than close the stack up over a gap that is about to be filled -- but only for
@@ -307,6 +313,40 @@ def discover(d, root):
 
     walk(root, 0)
     return found
+
+
+class Finder:
+    """discover(), remembering the cards between passes (see REDISCOVER)."""
+
+    def __init__(self, d, root, expected):
+        self.d, self.root, self.expected = d, root, expected
+        self.cards, self.walked = {}, None
+
+    def recheck(self):
+        """The known cards with their frames re-read (a card hiding or showing
+        itself changes its parent), or None if any is no longer that card."""
+        found = {}
+        for name, (client, _) in self.cards.items():
+            try:
+                if client.get_wm_name() != PREFIX + name:
+                    return None
+                parent = client.query_tree().parent
+            except Exception:
+                return None
+            found[name] = (client, client if parent.id == self.root.id
+                           else parent)
+        return found
+
+    def __call__(self):
+        if (len(self.cards) >= self.expected and self.walked is not None
+                and time.monotonic() - self.walked < REDISCOVER):
+            found = self.recheck()
+            if found is not None:
+                self.cards = found
+                return found
+        self.cards = discover(self.d, self.root)
+        self.walked = time.monotonic()
+        return self.cards
 
 
 def plan(cards, anchor, lay):
@@ -674,6 +714,7 @@ def watch(d, root, lay, verbose):
     watch_screen_changes(d, root, verbose)
     anchor = resolve_anchor(d, root, lay.top, verbose)
     expected = sum(len(r) for r in lay.rows)
+    find = Finder(d, root, expected)
     subscribed = set()
     refused = {}
     sizes = {}                    # name -> (size, when it was last different)
@@ -721,7 +762,7 @@ def watch(d, root, lay, verbose):
             # Every refusal on record was judged against the old head, and the
             # move that replaces it is the one that gets the stack back.
             refused.clear()
-        cards = discover(d, root)
+        cards = find()
         for _, (client, _) in cards.items():
             if client.id not in subscribed:
                 try:

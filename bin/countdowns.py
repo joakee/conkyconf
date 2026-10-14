@@ -9,8 +9,11 @@ The countdowns themselves are owned by the Countdowns GTK app
 with an atomic rename, so this never sees half a file. Only countdowns whose
 switch is on in the app are shown here. Targets are local wall-clock times.
 
-Emits conky markup (the card uses ${execpi 1}), so the card grows and shrinks
-with the number of countdowns and bin/reflow.py keeps the gaps.
+Emits conky markup, so the card grows and shrinks with the number of
+countdowns and bin/reflow.py keeps the gaps. The card runs this only when the
+file changes, and once a minute (lua/exec.lua): the ticking time left on each
+is not in this markup but a ${lua_parse countdown TARGET} (lua/countdowns.lua),
+which conky re-evaluates every second on its own.
 
 With nothing to show, the card hides altogether (bin/cardvis.py), and is
 mapped again the moment a countdown is switched on.
@@ -49,25 +52,6 @@ GLYPH = "\U000F051F"   # timer-sand, verified by rendering in this font
 
 def esc(s):
     return s.replace("$", "$$")
-
-
-def fmt_remaining(secs):
-    s = max(0, math.ceil(secs))
-    d, s = divmod(s, 86400)
-    h, s = divmod(s, 3600)
-    m, s = divmod(s, 60)
-    hms = f"{h:02}:{m:02}:{s:02}"
-    return f"{d}d {hms}" if d else hms
-
-
-def colour(left):
-    if left <= 0:
-        return "${color6}"       # green: done
-    if left < 3600:
-        return "${color7}"       # red: under an hour
-    if left < 86400:
-        return "${color1}"       # orange: under a day
-    return "${color4}"           # blue
 
 
 def load():
@@ -109,14 +93,12 @@ def main():
 
     lines = []
     for ts, t, label in rows:
-        left = ts - now
         if len(label) > LABEL_MAX:
             label = label[:LABEL_MAX - 1] + "…"
-        value = fmt_remaining(left) if left > 0 else "done"
         lines.append(
-            "${voffset %d}${color0}%s${alignr}%s${font %s:bold:size=11}%s${font}\n"
+            "${voffset %d}${color0}%s${alignr}${lua_parse countdown %d}\n"
             "${voffset %d}${color5}${font %s:size=8}%s${font}"
-            % (ROW_GAP, esc(label), colour(left), FONT, value, DATE_LIFT,
+            % (ROW_GAP, esc(label), math.ceil(ts), DATE_LIFT,
                FONT, t.strftime("%a %-d %b %Y · %H:%M")))
     print("\n".join(lines)
           + "${voffset %d}" % ((ROW_GAP + DATE_LIFT) * len(lines)), end="")
