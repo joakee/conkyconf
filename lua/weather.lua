@@ -59,7 +59,8 @@ local PLOT_H    = 24
 local GRAPH_H   = GRAPH_GAP + LABEL_H + PLOT_H
 local AXIS_H    = 16
 local TICK      = 2   -- every hour
-local TICK_MAJOR = 4  -- every 6th hour, the labelled ones
+local TICK_MAJOR = 4  -- the labelled ones
+local LABEL_EVERY = 2 -- hours between time labels
 local LABEL_PX  = 10
 local LINE_W    = 1.6
 -- Room kept clear around a label where the hour lines pass behind it.
@@ -124,8 +125,8 @@ local function grid(cr, n, x, width, ytop, ybot, holes)
   cairo_restore(cr)
 end
 
--- Hour ticks under the bottom graph's baseline, and the clock time under
--- every 6th. Only the bottom graph has them: the graphs share the axis.
+-- Hour ticks under the bottom graph's baseline, and the hour under every
+-- LABEL_EVERY-th. Only the bottom graph has them: the graphs share the axis.
 local function axis(cr, n, t0, x, base, width)
   local p = w.pal
   cairo_set_line_width(cr, 1)
@@ -133,7 +134,8 @@ local function axis(cr, n, t0, x, base, width)
   for i = 1, n do
     local tx = math.floor(x + (i - 1) * width / (n - 1)) + 0.5
     cairo_move_to(cr, tx, base)
-    cairo_line_to(cr, tx, base + ((i - 1) % 6 == 0 and TICK_MAJOR or TICK))
+    cairo_line_to(cr, tx,
+                  base + ((i - 1) % LABEL_EVERY == 0 and TICK_MAJOR or TICK))
   end
   cairo_stroke(cr)
   if not t0 then return end
@@ -141,16 +143,13 @@ local function axis(cr, n, t0, x, base, width)
   D.face(cr, LABEL_PX, false)
   D.rgba(cr, p.fg4, 1)
   local y = base + AXIS_H - 1
-  for i = 1, n, 6 do
-    local s = os.date('%H:%M', t0 + (i - 1) * 3600)
+  for i = 1, n, LABEL_EVERY do
+    -- Centred on its tick, even at the ends: two digits overhang the plot by
+    -- less than the card's padding.
+    local s = os.date('%H', t0 + (i - 1) * 3600)
     local tx = x + (i - 1) * width / (n - 1)
-    -- Centred on its tick, except at the ends, which would hang off the card.
-    if i == 1 then D.left(cr, s, x, y)
-    elseif i == n then D.right(cr, s, x + width, y)
-    else
-      local e = D.extents(cr, s)
-      D.left(cr, s, tx - e.width / 2 - e.x_bearing, y)
-    end
+    local e = D.extents(cr, s)
+    D.left(cr, s, tx - e.width / 2 - e.x_bearing, y)
   end
 end
 
@@ -202,6 +201,21 @@ end
 
 -- The temperature block: the hour (in the card's dim label colour) over the
 -- forecast for it, in HOURS evenly spaced columns across the content width.
+-- The horizontal span the temperature row covers, for a typical two-digit
+-- reading: from the first column's number to the last one's degree sign. The
+-- rain graph is fitted to it so the two line up. Taken from a template rather
+-- than the day's readings, so the graph does not change width with them.
+local function hours_span(cr, x, width)
+  D.face(cr, LABEL_PX, false)
+  local col = width / HOURS
+  local shift = D.extents(cr, '°').x_advance / 2
+  local num, full = D.extents(cr, '00'), D.extents(cr, '00°')
+  local first = x + 0.5 * col - shift
+  local last = x + (HOURS - 0.5) * col - shift
+  return first - num.width / 2,
+         last - num.width / 2 - num.x_bearing + full.x_bearing + full.width
+end
+
 local function hours(cr, g, f, x, width, t0)
   local p = w.pal
   local n = math.min(HOURS, #g.v)
@@ -301,11 +315,18 @@ function conky_weather_draw()
   end
 
   if #curves > 0 then
+    -- The plots match the temperature row's width when it is shown, rather
+    -- than running the full content width beneath it.
+    local px, pw = x, width
+    if #curves < #gs then
+      local l, r = hours_span(cr, x, width)
+      px, pw = math.floor(l + 0.5), math.floor(r - l + 0.5)
+    end
     local first, last = frames[curves[1]], frames[curves[#curves]]
     local n = #gs[curves[1]].v
-    grid(cr, n, x, width, first.y1, last.y0, holes)
-    for _, i in ipairs(curves) do curve(cr, gs[i], frames[i], x, width) end
-    axis(cr, n, gs.t0, x, last.y0 + 1, width)
+    grid(cr, n, px, pw, first.y1, last.y0, holes)
+    for _, i in ipairs(curves) do curve(cr, gs[i], frames[i], px, pw) end
+    axis(cr, n, gs.t0, px, last.y0 + 1, pw)
   end
   for i, g in ipairs(gs) do
     if g.kind == 'temp' then hours(cr, g, frames[i], x, width, gs.t0) end
