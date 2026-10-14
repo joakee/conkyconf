@@ -86,7 +86,7 @@ M.HALF_W = math.floor((M.CARD_W - M.GAP) / 2)
 -- it is what the stack looks like in the moment before the watcher's first
 -- pass, and if the watcher is not running.
 M.stack = {
-  { name = 'cpu',       h = 132, interval = 1  },
+  { name = 'cpu',       h = 132, interval = 1,  auto = true },
   { name = 'memory',    h = 127, interval = 2  },
   { name = 'batteries',  h = 130, interval = 5,  auto = true },
   { name = 'weather',    h = 290, interval = 1,  auto = true },

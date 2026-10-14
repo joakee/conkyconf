@@ -14,6 +14,7 @@ drawing helpers and Python data-source scripts.
   head/reflow window management, focus dimming).
 - `widgets/` — individual widget `.conf` definitions (CPU, memory, weather,
   fuel, now-playing, batteries).
+- `wayland/` — the same stack running under Wayland (Wayfire); see `wayland/README.md`.
 - `attic/` — earlier/replaced versions kept for reference.
 - `arch/` — Arch Linux package (`PKGBUILD`) and its `conky-gruvbox-dark` setup command.
 
@@ -31,6 +32,10 @@ At each login, `conky-gruvbox-dark start` brings that copy up to date with the p
 files you haven't changed are updated, files you have are kept, with the new version
 written beside them as `.pacnew`. `conky-gruvbox-dark uninstall` stops the widgets
 and deletes the login entry
+
+Under Wayland, `conky-gruvbox-dark start` runs `wayland/start.sh` instead of `start.sh`,
+so the same login entry works in both sessions. Wayland needs conky 1.25.4 or newer and
+Wayfire's `layer-output` plugin; `wayland/README.md` has the details.
 
 ## Notes
 

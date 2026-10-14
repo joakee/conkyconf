@@ -12,6 +12,7 @@ written beside it as <file>.pacnew. A file you deleted stays deleted.
   conky-gruvbox-dark install [--no-start]
         copy the stack in, start it at login, and start it now
   conky-gruvbox-dark start      bring the copy up to date and (re)start it
+                                (in Wayland mode under Wayland)
   conky-gruvbox-dark update     only bring the copy up to date
   conky-gruvbox-dark stop       stop the widgets
   conky-gruvbox-dark uninstall  stop, and remove the login entry (your copy
@@ -161,10 +162,18 @@ def stop():
             pass
 
 
+def wayland():
+    """Is this a Wayland session? The same test wayland/start.sh makes."""
+    return (os.environ.get("XDG_SESSION_TYPE") != "x11"
+            and bool(os.environ.get("WAYLAND_DISPLAY")))
+
+
 def start():
     if not update():
         return 1
-    script = os.path.join(CONFIG, "start.sh")
+    # Under Wayland the cards run through wayland/ (see wayland/README.md):
+    # its start.sh takes the place of the X11 one.
+    script = os.path.join(CONFIG, "wayland" if wayland() else "", "start.sh")
     if not os.access(script, os.X_OK):
         say("%s is missing or not executable" % script)
         return 1

@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+"""Run one of bin/'s card scripts under Wayland:  run SCRIPT.py [ARGS...]
+
+wayland/card.lua points each card's ${execpi ... bin/SCRIPT.py} here. The
+scripts are the X11 ones, unchanged; the only part of them that needs X is
+`import cardvis`, the card hiding itself, so the Wayland cardvis is imported
+first and theirs then finds it already loaded.
+"""
+import os
+import runpy
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import cardvis                                               # noqa: E402,F401
+
+script = os.path.join(os.path.dirname(HERE), "..", "bin", sys.argv[1])
+script = os.path.normpath(script)
+sys.argv = [script] + sys.argv[2:]
+sys.path[0] = os.path.dirname(script)
+runpy.run_path(script, run_name="__main__")
