@@ -57,6 +57,9 @@ local GRAPH_GAP = 8
 local LABEL_H   = 13
 local PLOT_H    = 24
 local GRAPH_H   = GRAPH_GAP + LABEL_H + PLOT_H
+local AXIS_H    = 16
+local TICK      = 2   -- every hour
+local TICK_MAJOR = 4  -- every 6th hour, the labelled ones
 local LABEL_PX  = 10
 local LINE_W    = 1.6
 
@@ -65,7 +68,37 @@ local STYLE = {
   rain = { name = 'rain · 24h', colour = 'blue' },
 }
 
-local function graph(cr, g, x, top, width)
+-- Hour ticks under a plot's baseline, and -- for the bottom graph only, since
+-- the graphs share one time axis -- the clock time under every 6th.
+local function axis(cr, n, t0, x, base, width, labels)
+  local p = w.pal
+  cairo_set_line_width(cr, 1)
+  D.rgba(cr, p.fg4, 0.8)
+  for i = 1, n do
+    local tx = math.floor(x + (i - 1) * width / (n - 1)) + 0.5
+    cairo_move_to(cr, tx, base)
+    cairo_line_to(cr, tx, base + ((i - 1) % 6 == 0 and TICK_MAJOR or TICK))
+  end
+  cairo_stroke(cr)
+  if not (labels and t0) then return end
+
+  D.face(cr, LABEL_PX, false)
+  D.rgba(cr, p.fg4, 1)
+  local y = base + AXIS_H - 1
+  for i = 1, n, 6 do
+    local s = os.date('%H:%M', t0 + (i - 1) * 3600)
+    local tx = x + (i - 1) * width / (n - 1)
+    -- Centred on its tick, except at the ends, which would hang off the card.
+    if i == 1 then D.left(cr, s, x, y)
+    elseif i == n then D.right(cr, s, x + width, y)
+    else
+      local e = D.extents(cr, s)
+      D.left(cr, s, tx - e.width / 2 - e.x_bearing, y)
+    end
+  end
+end
+
+local function graph(cr, g, x, top, width, t0, last)
   local p, st = w.pal, STYLE[g.kind]
   local v = g.v
   if not st or #v < 2 then return end
@@ -115,6 +148,9 @@ local function graph(cr, g, x, top, width)
   cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND)
   D.rgba(cr, p[st.colour], 1)
   cairo_stroke(cr)
+  cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT)
+
+  axis(cr, #v, t0, x, y0 + 1, width, last)
 end
 
 function conky_weather_draw()
@@ -130,9 +166,10 @@ function conky_weather_draw()
   -- Stacked up from the bottom of the content box, which is where the
   -- reservation bin/weather.py printed ends up, whatever the text above it.
   local bottom = conky_window.height - (w.PAD + 1)
-  local top = bottom - #gs * GRAPH_H
+  local top = bottom - #gs * GRAPH_H - AXIS_H
   for i, g in ipairs(gs) do
-    graph(cr, g, w.PAD + 1, top + (i - 1) * GRAPH_H + GRAPH_GAP, w.WIDTH)
+    graph(cr, g, w.PAD + 1, top + (i - 1) * GRAPH_H + GRAPH_GAP, w.WIDTH,
+          gs.t0, i == #gs)
   end
 
   cairo_destroy(cr)

@@ -100,6 +100,11 @@ GRAPH_GAP = 8     # above each graph: from the table, or from the graph above
 LABEL_H = 13      # the "temp" / "rain" label line
 PLOT_H = 24
 GRAPH_H = GRAPH_GAP + LABEL_H + PLOT_H
+# Under the last graph: the hour ticks and the time labels on every 6th.
+AXIS_H = 16
+# Extra clearance between the table and the first graph. The graphs are drawn
+# up from the bottom of the card, so only this file needs to know about it.
+LEAD = 8
 # conky charges a full line height for the line the ${voffset} itself sits on,
 # so the reservation gives that back (as bin/batteries.py does).
 LINE_H = 19
@@ -365,10 +370,11 @@ def graphs(hourly):
     some hour of it is above zero, since a flat line at 0 says nothing the
     absence of the graph does not.
     """
+    times = (hourly or {}).get("time") or []
     temps = (hourly or {}).get("temp") or []
     rains = (hourly or {}).get("rain") or []
     shown = []
-    if len(temps) >= 2:
+    if len(temps) >= 2 and len(times) == len(temps):
         lo, hi = min(temps), max(temps)
         shown.append(("temp", temps, f"{lo:.0f}° – {hi:.0f}°C"))
         if any(r > 0 for r in rains):
@@ -378,7 +384,10 @@ def graphs(hourly):
     def num(v):
         return f"{v:g}"
 
-    body = "return {\n" + "".join(
+    # t0 is the first point's unix time, which the hour ticks are labelled
+    # from; the points are an hour apart.
+    t0 = f"  t0 = {times[0]},\n" if shown else ""
+    body = "return {\n" + t0 + "".join(
         f"  {{ kind = '{kind}', label = '{label}', "
         f"v = {{ {', '.join(num(v) for v in vals)} }} }},\n"
         for kind, vals, label in shown
@@ -393,7 +402,7 @@ def graphs(hourly):
         with open(GRAPHS + ".tmp", "w") as f:
             f.write(body)
         os.replace(GRAPHS + ".tmp", GRAPHS)
-    return len(shown) * GRAPH_H
+    return len(shown) * GRAPH_H + (AXIS_H + LEAD if shown else 0)
 
 
 def main():
