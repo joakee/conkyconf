@@ -29,8 +29,8 @@ starting the cards, which start.sh does on X11:
     (see Backdrop), which costs the compositor nothing.
 
   * The cards fade back while a window has the focus, to bin/focusdim.py's
-    LEVEL. What is drawn on a card fades; its frosted background does not
-    (see Stack.dim).
+    LEVEL. A card turns more see-through, as on X11, but onto the frosted
+    wallpaper rather than the sharp one (see Stack.dim).
 
 Layout -- the stack table, M.TOP, M.GAP, M.SIDE, M.ALIGN -- is read from
 widget-common.lua by bin/reflow.py's own parser, so there is still one place
@@ -559,8 +559,8 @@ class Stack:
         The cards do the fading themselves (lua/compat.lua): this publishes
         the level in LEVEL_FILE and has each card redraw (SIGUSR2, which
         conky takes as "refresh now") for every step of it. Fading the
-        surfaces from the compositor, with the alpha plugin, would fade their
-        frosted backgrounds with them."""
+        surfaces from the compositor, with the alpha plugin, would show the
+        wallpaper through them sharp."""
         now = time.monotonic()
         goal = LEVEL if self.focused_window() else 1.0
         if self.fade and self.fade[1] != goal or not self.fade and self.level != goal:

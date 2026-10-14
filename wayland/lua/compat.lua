@@ -103,15 +103,16 @@ end
 
 -- Fading the card back while a window has the focus (wayland/bin/stack.py
 -- writes the level, 0-1, to LEVEL_FILE and has every card redraw as it
--- changes). Only what is drawn ON the card fades, into the card behind it;
--- the card itself stays as it is.
+-- changes): the card turns more see-through, as the X11 cards did, but what
+-- shows through stays frosted.
 --
 -- Done after everything else is drawn: scale the whole surface by the level
--- (DEST_IN), then put the card back underneath it (DEST_OVER). With a
--- backdrop the card is opaque, so that is simply the card again. Without one
--- it is translucent, and only so much of its colour goes back that a pixel
--- with nothing on it ends up as it was: for alpha a and level L,
--- a(1 - L) / (1 - La).
+-- (DEST_IN), then put back underneath it (DEST_OVER) what the card is in
+-- front of. With a backdrop that is the blurred wallpaper, so for level L
+-- every pixel ends up L of the card over 1 - L of the frosted wallpaper.
+-- Without one, the compositor shows the wallpaper through, unblurred; there
+-- only the content fades, into just enough of the card colour that a pixel
+-- with nothing on it ends up as it was: for alpha a, a(1 - L) / (1 - La).
 local LEVEL_FILE = RUNDIR .. '/wl-level'
 
 local function level()
@@ -134,11 +135,10 @@ function conky_gruvbox_fade(next_hook)
   cairo_set_operator(cr, CAIRO_OPERATOR_DEST_IN)
   cairo_paint_with_alpha(cr, l)
   if card.img then
-    cairo_push_group(cr)
-    cairo_set_operator(cr, CAIRO_OPERATOR_OVER)
-    paint_card(cr, width, height)
-    cairo_pop_group_to_source(cr)
     cairo_set_operator(cr, CAIRO_OPERATOR_DEST_OVER)
+    rounded(cr, width, height, card.radius)
+    cairo_clip(cr)
+    cairo_set_source_surface(cr, card.img, 0, 0)
     cairo_paint(cr)
   else
     local a = card.a

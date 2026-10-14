@@ -45,9 +45,9 @@ starts `bin/stack.py`.
   Wayfire's blur looks the same, but it re-blurs behind a card every time
   the card redraws, which cost a dropped frame or two each second. Changing
   the wallpaper is picked up within 10 seconds.
-- **The focus fade leaves the background alone.** On X11 the whole card
-  faded. Here only what's drawn on the card fades, into the frosted card.
-  `stack.py` writes the level to `wl-level` in the run directory and sends
+- **The focus fade keeps the frosting.** As on X11, the card turns more
+  see-through while a window has focus, but what shows through is the
+  blurred wallpaper rather than the sharp one. `stack.py` writes the level to `wl-level` in the run directory and sends
   each card SIGUSR2 (conky's "redraw now") for every step of the fade.
 - **Card heights can differ slightly from X11.** Fonts are laid out by Pango
   rather than Xft, so a card can end up a few pixels taller or shorter. The
