@@ -88,7 +88,7 @@ M.HALF_W = math.floor((M.CARD_W - M.GAP) / 2)
 M.stack = {
   { name = 'cpu',       h = 132, interval = 1  },
   { name = 'memory',    h = 127, interval = 2  },
-  { name = 'weather',    h = 200, interval = 1  },
+  { name = 'weather',    h = 290, interval = 1,  auto = true },
   { name = 'fuel',       h = 180, interval = 1  },
   { name = 'nowplaying', h = 146, interval = 1,  auto = true },
   { name = 'batteries',  h = 130, interval = 5,  auto = true },

@@ -16,6 +16,15 @@ backend for the Bureau's own website and every response it returns says
 "You must not use, copy or share it". The two products above are the
 publicly published equivalents and carry no such restriction.
 
+The 24 h temperature and rainfall graphs come from Open-Meteo's hourly
+forecast (api.open-meteo.com, free for non-commercial use, CC BY 4.0), whose
+default model blend for Australia includes the Bureau's own ACCESS-G. BOM's
+only public hourly product is the gridded ADFD, which is GRIB -- far too heavy
+for a desktop card. The series is taken at fetch time, so the graphs run from
+the last refresh to 24 h after it. The curves are drawn in Cairo by
+lua/weather.lua from a Lua table this script drops in $XDG_RUNTIME_DIR, the
+same arrangement as the batteries card; the text only reserves their space.
+
 Sun times are computed locally with the NOAA solar position algorithm. They
 are pure astronomy -- latitude, longitude and the date -- so they need no
 network. That is what made leaving wttr.in possible: bundling twilight times
@@ -34,6 +43,7 @@ Env:
   WEATHER_AREA     forecast area within that product (default Perth)
   WEATHER_LAT      override the latitude used for the sun times
   WEATHER_LON      override the longitude used for the sun times
+                   (both also place the hourly forecast)
 """
 
 import datetime as dt
@@ -57,6 +67,12 @@ AREA = os.environ.get("WEATHER_AREA", "Perth")
 
 OBS_URL = f"https://www.bom.gov.au/fwo/{OBS_ID}/{OBS_ID}.{WMO}.json"
 FCST_URL = f"https://www.bom.gov.au/fwo/{FCST_ID}.xml"
+# 25 hourly points: the current hour, then 24 more.
+HOURLY_URL = (
+    "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
+    "&hourly=temperature_2m,precipitation&forecast_hours=25"
+    "&timeformat=unixtime&timezone=auto"
+)
 UA = "conky-gruvbox-weather/1.0 (personal desktop widget)"
 
 CACHE_DIR = os.path.join(
@@ -67,6 +83,26 @@ CACHE = os.path.join(CACHE_DIR, "weather.json")
 LOCK = os.path.join(CACHE_DIR, "weather.lock")
 # Present while the last manual refresh failed; cleared by any good fetch.
 ERR = os.path.join(CACHE_DIR, "weather.err")
+
+# The series lua/weather.lua draws. Rewritten only when it changes, though the
+# render runs every second.
+RUNDIR = os.path.join(
+    os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "conky-gruvbox"
+)
+GRAPHS = os.path.join(RUNDIR, "weather-graphs.lua")
+
+# ── graph layout, in pixels ───────────────────────────────────
+# Mirrored by lua/weather.lua; the two must agree or the curves will not sit in
+# the space reserved for them here. The graphs are stacked at the bottom of the
+# card, each a label line over a plot, and the rain one is left out entirely
+# when no rain is forecast.
+GRAPH_GAP = 8     # above each graph: from the table, or from the graph above
+LABEL_H = 13      # the "temp" / "rain" label line
+PLOT_H = 24
+GRAPH_H = GRAPH_GAP + LABEL_H + PLOT_H
+# conky charges a full line height for the line the ${voffset} itself sits on,
+# so the reservation gives that back (as bin/batteries.py does).
+LINE_H = 19
 
 # A click refreshes in well under a second, which is shorter than conky's
 # one-second render tick, so the "refreshing" icon would usually never be
@@ -178,8 +214,7 @@ def fetch(timeout):
         # TTL. Carry the previous values forward instead; the forecast only
         # changes a few times a day.
         try:
-            with open(CACHE) as f:
-                prev = json.load(f)
+            prev = previous()
             icon, precis = prev.get("icon"), prev.get("cond") or ""
             temp_min, temp_max = prev.get("temp_min"), prev.get("temp_max")
             uv_index = prev.get("uv_index")
@@ -204,11 +239,46 @@ def fetch(timeout):
         "lon": rec.get("lon"),
         "station": (rec.get("name") or "") + " " + str(rec.get("wmo") or ""),
     }
+    # Like the precis, the graphs are a nice-to-have: keep the last good
+    # series rather than losing the graphs to one failed request.
+    try:
+        lat = os.environ.get("WEATHER_LAT", rec.get("lat") or -31.95)
+        lon = os.environ.get("WEATHER_LON", rec.get("lon") or 115.86)
+        data["hourly"] = fetch_hourly(float(lat), float(lon), timeout)
+    except Exception:
+        data["hourly"] = previous().get("hourly")
     tmp = CACHE + ".tmp"
     with open(tmp, "w") as f:
         json.dump(data, f)
     os.replace(tmp, CACHE)
     return data
+
+
+def previous():
+    """The cache as it stands, or {}."""
+    try:
+        with open(CACHE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def fetch_hourly(lat, lon, timeout):
+    h = json.loads(get(HOURLY_URL.format(lat=lat, lon=lon), timeout))["hourly"]
+    rows = [
+        (t, temp, rain or 0.0)
+        for t, temp, rain in zip(
+            h["time"], h["temperature_2m"], h["precipitation"]
+        )
+        if temp is not None
+    ]
+    if len(rows) < 2:
+        raise ValueError("hourly forecast is empty")
+    return {
+        "time": [r[0] for r in rows],
+        "temp": [r[1] for r in rows],
+        "rain": [r[2] for r in rows],
+    }
 
 
 def solar(lat, lon, tz_offset_hours, date):
@@ -288,6 +358,44 @@ def header(glyph, right=""):
     )
 
 
+def graphs(hourly):
+    """Write the series for lua/weather.lua and return the height to reserve.
+
+    Temperature always shows when there is a forecast at all; rain only when
+    some hour of it is above zero, since a flat line at 0 says nothing the
+    absence of the graph does not.
+    """
+    temps = (hourly or {}).get("temp") or []
+    rains = (hourly or {}).get("rain") or []
+    shown = []
+    if len(temps) >= 2:
+        lo, hi = min(temps), max(temps)
+        shown.append(("temp", temps, f"{lo:.0f}° – {hi:.0f}°C"))
+        if any(r > 0 for r in rains):
+            shown.append(("rain", rains,
+                          f"peak {max(rains):g} mm/h · {sum(rains):.1f} mm"))
+
+    def num(v):
+        return f"{v:g}"
+
+    body = "return {\n" + "".join(
+        f"  {{ kind = '{kind}', label = '{label}', "
+        f"v = {{ {', '.join(num(v) for v in vals)} }} }},\n"
+        for kind, vals, label in shown
+    ) + "}\n"
+    try:
+        with open(GRAPHS) as f:
+            same = f.read() == body
+    except OSError:
+        same = False
+    if not same:
+        os.makedirs(RUNDIR, exist_ok=True)
+        with open(GRAPHS + ".tmp", "w") as f:
+            f.write(body)
+        os.replace(GRAPHS + ".tmp", GRAPHS)
+    return len(shown) * GRAPH_H
+
+
 def main():
     os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -347,6 +455,7 @@ def main():
             with open(CACHE) as f:
                 data = json.load(f)
         except Exception:
+            graphs(None)
             print(header("\U000F0590"))
             print("${voffset 2}${color5}waiting for BOM")
             return 0
@@ -440,6 +549,10 @@ def main():
             f"${{goto {RIGHT_LABEL}}}${{color5}}{rlabel}"
             f"${{alignr}}${{color2}}{rval}"
         )
+
+    reserve = graphs(data.get("hourly"))
+    if reserve:
+        print("${voffset %d}" % max(0, reserve - LINE_H), end="")
     return 0
 
 
