@@ -121,6 +121,9 @@ SIZE_SETTLE = 2.0
 RESCUE_BEFORE = 1.0
 RESCUE_AFTER = 0.6
 RELOAD_POLL = 0.25
+# Conky places some cards a pixel off their configured gap_x/gap_y; Pins
+# measures that and pins around it. Anything bigger is a card in transit.
+BIAS_MAX = 3
 
 
 def single_instance():
@@ -427,6 +430,15 @@ def spot(want, width, anchor, lay):
     return top, inset
 
 
+def unspot(where, width, anchor, lay):
+    """The root position M.card's (top, inset) names: spot() run backwards."""
+    top, inset = where
+    y = top + anchor.top - lay.top
+    if lay.align == "top_right":
+        return anchor.left + anchor.width - inset - width, y
+    return anchor.left + inset, y
+
+
 def conky_pids():
     """card name -> pid of the conky running it, read off its `-c
     widgets/NN-name.conf` argument. Neither the card nor its window can say:
@@ -472,6 +484,15 @@ class Pins:
     refused would have conky ask for it again on every update. A card that
     has never written .placed (started from an older widget-common.lua) is
     left alone; the direct moves still apply to it.
+
+    Conky does not put every card exactly where its gap_x/gap_y says, either:
+    the cards that load Lua land a pixel up or left of the rest (see M.SHIFT).
+    Pinned at the plan's spot, such a card was dragged a pixel off it on every
+    update and moved straight back by the next pass -- a 1 px jiggle, once a
+    second. So each card's error is measured whenever conky has placed it (it
+    sits off the plan, and no reload is in flight to make .placed stale), and
+    the pin is offset to cancel it. An error larger than BIAS_MAX is not
+    conky's but a card caught mid-move, and is ignored.
     """
 
     def __init__(self, changes, verbose=False):
@@ -479,6 +500,7 @@ class Pins:
         self.changes = changes       # name -> recent resize times, see watch
         self.sent = {}               # name -> (pid, spot, give up waiting at)
         self.checks = {}             # name -> [pid, sent at, loaded, due]
+        self.bias = {}               # name -> (dx, dy) conky lands off its pin
 
     @staticmethod
     def loaded(name):
@@ -573,12 +595,18 @@ class Pins:
         now, pids = time.monotonic(), None
         self.rescue(now)
         for name, _, cur, want, (width, _) in moves:
+            have = self.placed(name)
+            if have is not None and cur != want and name not in self.checks:
+                at = unspot(have, width, anchor, lay)
+                dx, dy = cur[0] - at[0], cur[1] - at[1]
+                if abs(dx) <= BIAS_MAX and abs(dy) <= BIAS_MAX:
+                    self.bias[name] = (dx, dy)
             if cur != want and name not in moved:
                 continue                      # refused, or not ours to pin yet
-            have = self.placed(name)
             if have is None:
                 continue
-            where = spot(want, width, anchor, lay)
+            dx, dy = self.bias.get(name, (0, 0))
+            where = spot((want[0] - dx, want[1] - dy), width, anchor, lay)
             # Even when the card is configured right already: a reload sent
             # for an earlier plan may still be on its way (conky sleeps a
             # second before it reads the config), and must not find that

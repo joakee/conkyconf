@@ -2,7 +2,7 @@
 
 pkgname=conky-gruvbox-dark-git
 _pkgname=conky-gruvbox-dark
-pkgver=r0
+pkgver=r20.aa1ea2b
 pkgrel=1
 pkgdesc="Gruvbox-dark conky widget stack: rounded cards for CPU, memory, weather, fuel prices, now playing, batteries and countdowns"
 arch=('any')
