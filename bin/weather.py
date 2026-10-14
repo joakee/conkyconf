@@ -16,12 +16,13 @@ backend for the Bureau's own website and every response it returns says
 "You must not use, copy or share it". The two products above are the
 publicly published equivalents and carry no such restriction.
 
-The 24 h temperature and rainfall graphs come from Open-Meteo's hourly
+The hourly temperature row (next 12 h) and the 24 h rainfall graph come from
+Open-Meteo's hourly
 forecast (api.open-meteo.com, free for non-commercial use, CC BY 4.0), whose
 default model blend for Australia includes the Bureau's own ACCESS-G. BOM's
 only public hourly product is the gridded ADFD, which is GRIB -- far too heavy
-for a desktop card. The series is taken at fetch time, so the graphs run from
-the last refresh to 24 h after it. The curves are drawn in Cairo by
+for a desktop card. The series is taken at fetch time, so both run from the
+last refresh onwards. They are drawn in Cairo by
 lua/weather.lua from a Lua table this script drops in $XDG_RUNTIME_DIR, the
 same arrangement as the batteries card; the text only reserves their space.
 
@@ -102,6 +103,8 @@ PLOT_H = 24
 GRAPH_H = GRAPH_GAP + LABEL_H + PLOT_H
 # Under the last graph: the hour ticks and the time labels on every 6th.
 AXIS_H = 16
+# Extra space under the hourly temperature rows when the rain graph follows.
+TEMP_AFTER = 8
 # Extra clearance between the table and the first graph. The graphs are drawn
 # up from the bottom of the card, so only this file needs to know about it.
 LEAD = 8
@@ -375,8 +378,9 @@ def graphs(hourly):
     rains = (hourly or {}).get("rain") or []
     shown = []
     if len(temps) >= 2 and len(times) == len(temps):
-        lo, hi = min(temps), max(temps)
-        shown.append(("temp", temps, f"{lo:.0f}° – {hi:.0f}°C"))
+        # Not a curve: lua/weather.lua lays the next 12 hours out as columns,
+        # each hour over its forecast, and the block needs no label of its own.
+        shown.append(("temp", temps, ""))
         if any(r > 0 for r in rains):
             shown.append(("rain", rains,
                           f"peak {max(rains):g} mm/h · {sum(rains):.1f} mm"))
@@ -402,7 +406,10 @@ def graphs(hourly):
         with open(GRAPHS + ".tmp", "w") as f:
             f.write(body)
         os.replace(GRAPHS + ".tmp", GRAPHS)
-    return len(shown) * GRAPH_H + (AXIS_H + LEAD if shown else 0)
+    # Only a curve (the rain graph) has the time axis under it.
+    curve = any(kind != "temp" for kind, _, _ in shown)
+    extra = AXIS_H + TEMP_AFTER if curve else 0
+    return len(shown) * GRAPH_H + extra + (LEAD if shown else 0)
 
 
 def main():

@@ -62,15 +62,71 @@ local TICK      = 2   -- every hour
 local TICK_MAJOR = 4  -- every 6th hour, the labelled ones
 local LABEL_PX  = 10
 local LINE_W    = 1.6
+-- Room kept clear around a label where the hour lines pass behind it.
+local KNOCKOUT  = 2
+-- The temperature block: one column per hour, the hour over its forecast,
+-- like the iOS weather app. Twelve is as many as fit the card legibly.
+local HOURS     = 12
+-- Extra space under it when a graph follows (TEMP_AFTER in bin/weather.py).
+local TEMP_AFTER = 8
 
 local STYLE = {
-  temp = { name = 'temp · 24h', colour = 'yellow' },
+  temp = { name = 'temp · 12h', colour = 'yellow' },
   rain = { name = 'rain · 24h', colour = 'blue' },
 }
 
--- Hour ticks under a plot's baseline, and -- for the bottom graph only, since
--- the graphs share one time axis -- the clock time under every 6th.
-local function axis(cr, n, t0, x, base, width, labels)
+-- Where one graph's parts sit: its label baseline, and the top (y1) and
+-- baseline (y0) of its plot.
+local function frame(top)
+  return { base = top + LABEL_H - 3,
+           y1 = top + LABEL_H + 2,
+           y0 = top + LABEL_H + PLOT_H - 1 }
+end
+
+-- Both labels of a graph, with the boxes their ink covers.
+local function labels(cr, g, f, x, width)
+  D.face(cr, LABEL_PX, false)
+  local out = {}
+  for _, l in ipairs({ { STYLE[g.kind].name, 'left' }, { g.label, 'right' } }) do
+    local e = D.extents(cr, l[1])
+    local lx = l[2] == 'left' and x or x + width - e.width - e.x_bearing
+    out[#out + 1] = { text = l[1], x = lx, base = f.base, colour = l[2] == 'left' and 'fg4' or 'fg1',
+                      box = { lx + e.x_bearing, f.base + e.y_bearing, e.width, e.height } }
+  end
+  return out
+end
+
+-- One vertical line per hour, from the top plot to the bottom one -- through
+-- the gap between them, so the graphs read as one chart on one time axis --
+-- with the line at every 6th hour a little stronger. The labels in that gap
+-- are clipped out, so no line runs through text.
+local function grid(cr, n, x, width, ytop, ybot, holes)
+  cairo_save(cr)
+  cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD)
+  cairo_rectangle(cr, x - 1, ytop - 1, width + 2, ybot - ytop + 2)
+  for _, b in ipairs(holes) do
+    cairo_rectangle(cr, b[1] - KNOCKOUT, b[2] - KNOCKOUT,
+                    b[3] + 2 * KNOCKOUT, b[4] + 2 * KNOCKOUT)
+  end
+  cairo_clip(cr)
+  cairo_set_line_width(cr, 1)
+  for major = 0, 1 do
+    D.rgba(cr, w.pal.bg2, major == 1 and 0.9 or 0.45)
+    for i = 1, n do
+      if ((i - 1) % 6 == 0) == (major == 1) then
+        local tx = math.floor(x + (i - 1) * width / (n - 1)) + 0.5
+        cairo_move_to(cr, tx, ytop)
+        cairo_line_to(cr, tx, ybot)
+      end
+    end
+    cairo_stroke(cr)
+  end
+  cairo_restore(cr)
+end
+
+-- Hour ticks under the bottom graph's baseline, and the clock time under
+-- every 6th. Only the bottom graph has them: the graphs share the axis.
+local function axis(cr, n, t0, x, base, width)
   local p = w.pal
   cairo_set_line_width(cr, 1)
   D.rgba(cr, p.fg4, 0.8)
@@ -80,7 +136,7 @@ local function axis(cr, n, t0, x, base, width, labels)
     cairo_line_to(cr, tx, base + ((i - 1) % 6 == 0 and TICK_MAJOR or TICK))
   end
   cairo_stroke(cr)
-  if not (labels and t0) then return end
+  if not t0 then return end
 
   D.face(cr, LABEL_PX, false)
   D.rgba(cr, p.fg4, 1)
@@ -98,47 +154,60 @@ local function axis(cr, n, t0, x, base, width, labels)
   end
 end
 
-local function graph(cr, g, x, top, width, t0, last)
-  local p, st = w.pal, STYLE[g.kind]
-  local v = g.v
-  if not st or #v < 2 then return end
-
-  D.face(cr, LABEL_PX, false)
-  D.rgba(cr, p.fg4, 1)
-  D.left(cr, st.name, x, top + LABEL_H - 3)
-  D.rgba(cr, p.fg1, 1)
-  D.right(cr, g.label, x + width, top + LABEL_H - 3)
-
-  -- Rain is scaled from zero, and to at least 1 mm/h, so a passing drizzle
-  -- reads as a drizzle rather than filling the plot. Temperature is scaled
-  -- to its own range: the label carries the numbers.
+-- The value range a graph is plotted over. Rain is scaled from zero, and to
+-- at least 1 mm/h, so a passing drizzle reads as a drizzle rather than filling
+-- the plot.
+local function range(g)
   local lo, hi = math.huge, -math.huge
-  for _, n in ipairs(v) do lo, hi = math.min(lo, n), math.max(hi, n) end
+  for _, n in ipairs(g.v) do lo, hi = math.min(lo, n), math.max(hi, n) end
   if g.kind == 'rain' then lo, hi = 0, math.max(hi, 1) end
   if hi - lo < 1 then lo, hi = lo - 0.5, hi + 0.5 end
+  return lo, hi
+end
 
-  local y0, y1 = top + LABEL_H + PLOT_H - 1, top + LABEL_H + 2
-  local function px(i) return x + (i - 1) * width / (#v - 1) end
-  local function py(n) return y0 - (n - lo) / (hi - lo) * (y0 - y1) end
-
-  -- Faint guides every 6 hours, so the shape can be read against the clock.
-  cairo_set_line_width(cr, 1)
-  D.rgba(cr, p.bg2, 0.7)
-  for i = 7, #v - 1, 6 do
-    cairo_move_to(cr, math.floor(px(i)) + 0.5, y1)
-    cairo_line_to(cr, math.floor(px(i)) + 0.5, y0)
+-- The temperature block: the hour (in the card's dim label colour) over the
+-- forecast for it, in HOURS evenly spaced columns across the content width.
+local function hours(cr, g, f, x, width, t0)
+  local p = w.pal
+  local n = math.min(HOURS, #g.v)
+  local col = width / n
+  local hour_base = f.y1 + 8
+  D.face(cr, LABEL_PX, false)
+  for i = 1, n do
+    local cx = x + (i - 0.5) * col
+    local hr = t0 and os.date('%H', t0 + (i - 1) * 3600) or ''
+    D.rgba(cr, p.fg4, 1)
+    D.left(cr, hr, cx - D.extents(cr, hr).width / 2, hour_base)
+    local t = string.format('%.0f°', g.v[i])
+    -- Centre the digits, not the digits plus the degree sign, so a column's
+    -- number sits under its hour.
+    local num = D.extents(cr, string.format('%.0f', g.v[i]))
+    D.rgba(cr, p.fg1, 1)
+    D.left(cr, t, cx - num.width / 2 - num.x_bearing, f.y0)
   end
-  cairo_move_to(cr, x, y0 + 0.5)
-  cairo_line_to(cr, x + width, y0 + 0.5)
+end
+
+local function curve(cr, g, f, x, width)
+  local p, v = w.pal, g.v
+  local colour = p[STYLE[g.kind].colour]
+  local lo, hi = range(g)
+
+  local function px(i) return x + (i - 1) * width / (#v - 1) end
+  local function py(n) return f.y0 - (n - lo) / (hi - lo) * (f.y0 - f.y1) end
+
+  cairo_set_line_width(cr, 1)
+  D.rgba(cr, p.bg2, 0.9)
+  cairo_move_to(cr, x, f.y0 + 0.5)
+  cairo_line_to(cr, x + width, f.y0 + 0.5)
   cairo_stroke(cr)
 
   cairo_move_to(cr, px(1), py(v[1]))
   for i = 2, #v do cairo_line_to(cr, px(i), py(v[i])) end
   local line = cairo_copy_path(cr)
-  cairo_line_to(cr, px(#v), y0)
-  cairo_line_to(cr, px(1), y0)
+  cairo_line_to(cr, px(#v), f.y0)
+  cairo_line_to(cr, px(1), f.y0)
   cairo_close_path(cr)
-  D.rgba(cr, p[st.colour], 0.18)
+  D.rgba(cr, colour, 0.18)
   cairo_fill(cr)
 
   cairo_append_path(cr, line)
@@ -146,17 +215,18 @@ local function graph(cr, g, x, top, width, t0, last)
   cairo_set_line_width(cr, LINE_W)
   cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND)
   cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND)
-  D.rgba(cr, p[st.colour], 1)
+  D.rgba(cr, colour, 1)
   cairo_stroke(cr)
   cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT)
-
-  axis(cr, #v, t0, x, y0 + 1, width, last)
 end
 
 function conky_weather_draw()
   if conky_window == nil then return end
   local ok, gs = pcall(dofile, GRAPHS)
   if not ok or type(gs) ~= 'table' or #gs == 0 then return end
+  for _, g in ipairs(gs) do
+    if not STYLE[g.kind] or #g.v < 2 then return end
+  end
 
   local cs = cairo_xlib_surface_create(conky_window.display, conky_window.drawable,
                                        conky_window.visual,
@@ -165,11 +235,46 @@ function conky_weather_draw()
 
   -- Stacked up from the bottom of the content box, which is where the
   -- reservation bin/weather.py printed ends up, whatever the text above it.
-  local bottom = conky_window.height - (w.PAD + 1)
-  local top = bottom - #gs * GRAPH_H - AXIS_H
+  -- The time axis under the curves is only there when there is a curve: the
+  -- temperature block labels its own hours.
+  local x, width = w.PAD + 1, w.WIDTH
+  local curves = {}
   for i, g in ipairs(gs) do
-    graph(cr, g, w.PAD + 1, top + (i - 1) * GRAPH_H + GRAPH_GAP, w.WIDTH,
-          gs.t0, i == #gs)
+    if g.kind ~= 'temp' then curves[#curves + 1] = i end
+  end
+  local heights, total = {}, 0
+  for i, g in ipairs(gs) do
+    heights[i] = GRAPH_H + ((g.kind == 'temp' and i < #gs) and TEMP_AFTER or 0)
+    total = total + heights[i]
+  end
+  local top = conky_window.height - (w.PAD + 1) - total
+              - (#curves > 0 and AXIS_H or 0)
+  local frames, texts, holes = {}, {}, {}
+  for i, g in ipairs(gs) do
+    frames[i] = frame(top + GRAPH_GAP)
+    top = top + heights[i]
+    for _, l in ipairs(labels(cr, g, frames[i], x, width)) do
+      texts[#texts + 1] = l
+      -- only labels between the first curve and the last are crossed by grid
+      if #curves > 1 and i > curves[1] then holes[#holes + 1] = l.box end
+    end
+  end
+
+  if #curves > 0 then
+    local first, last = frames[curves[1]], frames[curves[#curves]]
+    local n = #gs[curves[1]].v
+    grid(cr, n, x, width, first.y1, last.y0, holes)
+    for _, i in ipairs(curves) do curve(cr, gs[i], frames[i], x, width) end
+    axis(cr, n, gs.t0, x, last.y0 + 1, width)
+  end
+  for i, g in ipairs(gs) do
+    if g.kind == 'temp' then hours(cr, g, frames[i], x, width, gs.t0) end
+  end
+
+  D.face(cr, LABEL_PX, false)
+  for _, l in ipairs(texts) do
+    D.rgba(cr, w.pal[l.colour], 1)
+    D.left(cr, l.text, l.x, l.base)
   end
 
   cairo_destroy(cr)
