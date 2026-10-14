@@ -165,6 +165,41 @@ local function range(g)
   return lo, hi
 end
 
+-- Colour for a temperature, blended between gruvbox stops. Fixed in degrees
+-- rather than scaled to the day's range, so a colour always means the same
+-- thing: blue is cold, green mild, yellow warm, red hot.
+local TEMP_STOPS = {
+  { 0,  'blue' }, { 10, 'aqua' }, { 18, 'green' },
+  { 24, 'yellow' }, { 30, 'orange' }, { 36, 'red' },
+}
+
+local function rgb(hex)
+  local n = tonumber(hex, 16)
+  return math.floor(n / 65536) % 256, math.floor(n / 256) % 256, n % 256
+end
+
+local function temp_colour(cr, t)
+  local s = TEMP_STOPS
+  local hex
+  if t <= s[1][1] then hex = w.pal[s[1][2]]
+  elseif t >= s[#s][1] then hex = w.pal[s[#s][2]]
+  else
+    for i = 2, #s do
+      if t <= s[i][1] then
+        local f = (t - s[i - 1][1]) / (s[i][1] - s[i - 1][1])
+        local r0, g0, b0 = rgb(w.pal[s[i - 1][2]])
+        local r1, g1, b1 = rgb(w.pal[s[i][2]])
+        hex = string.format('%02x%02x%02x',
+          math.floor(r0 + (r1 - r0) * f + 0.5),
+          math.floor(g0 + (g1 - g0) * f + 0.5),
+          math.floor(b0 + (b1 - b0) * f + 0.5))
+        break
+      end
+    end
+  end
+  D.rgba(cr, hex, 1)
+end
+
 -- The temperature block: the hour (in the card's dim label colour) over the
 -- forecast for it, in HOURS evenly spaced columns across the content width.
 local function hours(cr, g, f, x, width, t0)
@@ -173,16 +208,21 @@ local function hours(cr, g, f, x, width, t0)
   local col = width / n
   local hour_base = f.y1 + 8
   D.face(cr, LABEL_PX, false)
+  -- Each number sits centred under its hour, with the degree sign hanging off
+  -- to its right. Left at that, the whole block would sit off centre by half
+  -- a degree sign, so both rows are shifted back by that much.
+  local shift = D.extents(cr, '°').x_advance / 2
   for i = 1, n do
-    local cx = x + (i - 0.5) * col
+    local cx = x + (i - 0.5) * col - shift
     local hr = t0 and os.date('%H', t0 + (i - 1) * 3600) or ''
+    local he = D.extents(cr, hr)
     D.rgba(cr, p.fg4, 1)
-    D.left(cr, hr, cx - D.extents(cr, hr).width / 2, hour_base)
+    D.left(cr, hr, cx - he.width / 2 - he.x_bearing, hour_base)
     local t = string.format('%.0f°', g.v[i])
     -- Centre the digits, not the digits plus the degree sign, so a column's
     -- number sits under its hour.
     local num = D.extents(cr, string.format('%.0f', g.v[i]))
-    D.rgba(cr, p.fg1, 1)
+    temp_colour(cr, g.v[i])
     D.left(cr, t, cx - num.width / 2 - num.x_bearing, f.y0)
   end
 end
