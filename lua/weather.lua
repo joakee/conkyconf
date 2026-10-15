@@ -23,6 +23,7 @@ local SCRIPT = HOME .. '/.config/conky/gruvbox-dark/bin/weather.py'
 local w = dofile(HOME .. '/.config/conky/gruvbox-dark/widget-common.lua')
 local D = dofile(HOME .. '/.config/conky/gruvbox-dark/lua/draw.lua')
 local E = dofile(HOME .. '/.config/conky/gruvbox-dark/lua/exec.lua')
+dofile(HOME .. '/.config/conky/gruvbox-dark/lua/clickable.lua')
 local GRAPHS = (os.getenv('XDG_RUNTIME_DIR') or '/tmp')
                .. '/conky-gruvbox/weather-graphs.lua'
 

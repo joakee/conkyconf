@@ -10,6 +10,7 @@
 local DIR    = os.getenv('HOME') .. '/.config/conky/gruvbox-dark'
 local SCRIPT = DIR .. '/bin/fuel.py'
 local E = dofile(DIR .. '/lua/exec.lua')
+dofile(DIR .. '/lua/clickable.lua')
 
 -- Header geometry, in window pixels; see lua/weather.lua for where these come
 -- from. The label is at most "FUEL · BRAND DIESEL" (~150 px from the left

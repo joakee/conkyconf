@@ -17,6 +17,7 @@ local DATA = (os.getenv('XDG_DATA_HOME') or (HOME .. '/.local/share'))
              .. '/countdowns/countdowns.json'
 local FONT = 'Maple Mono NF CN'
 local E = dofile(HOME .. '/.config/conky/gruvbox-dark/lua/exec.lua')
+dofile(HOME .. '/.config/conky/gruvbox-dark/lua/clickable.lua')
 
 E.key(function()
   local fh = io.open(DATA)
