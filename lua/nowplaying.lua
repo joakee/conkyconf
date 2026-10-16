@@ -105,7 +105,7 @@ local function position(d)
 end
 
 local function draw_progress(cr, d)
-  local x, y = w.PAD, Y0 + ART + 14
+  local x, y = w.PAD, Y0 + ART + 20
   local pos = position(d)
   local frac = 0
   if (d.length or 0) > 0 then

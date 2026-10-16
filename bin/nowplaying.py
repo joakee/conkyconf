@@ -51,7 +51,7 @@ WIDTH    = 292
 ART      = 76     # album art is square
 BAR_H    = 4
 HEADER_H = 6      # padding under conky's own header line
-FOOT_H   = 18     # times row + progress bar under the art
+FOOT_H   = 24     # gap + times row + progress bar under the art
 LINE_H   = 19     # conky charges a line height for the ${voffset} line itself
 
 BUS = ["busctl", "--user", "--json=short"]
